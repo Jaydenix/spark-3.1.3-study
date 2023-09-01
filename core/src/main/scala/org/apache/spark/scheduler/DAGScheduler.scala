@@ -1438,7 +1438,7 @@ private[spark] class DAGScheduler(
       stage match {
         case s: ShuffleMapStage =>
           partitionsToCompute.map { id =>
-            // 这里的rdd是stage末尾的rdd,真正计算的时候,会往前寻找父RDD,来获取父rdd的位置,对于ShuffleMapStage而言,从hdfs读取数据的是HadoopRDD
+            // 这里的rdd是stage末尾的rdd,真正计算的时候,会往前寻找父RDD,来获取父rdd的位置,对于ShuffleMapStage而言,从hdfs读取数据的是NewHadoopRDD
             (id, getPreferredLocs(stage.rdd, id))
           }.toMap
         case s: ResultStage =>
