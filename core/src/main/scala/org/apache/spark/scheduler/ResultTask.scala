@@ -63,7 +63,9 @@ private[spark] class ResultTask[T, U](
     jobId: Option[Int] = None,
     appId: Option[String] = None,
     appAttemptId: Option[String] = None,
-    isBarrier: Boolean = false)
+    isBarrier: Boolean = false,
+    // 添加sizes变量 默认为Nil 注意放在参数的末尾位置 这样可以避免修改大量代码
+    allLocsAndSize:IndexedSeq[(Seq[TaskLocation], Seq[Long])]=IndexedSeq.empty)
   extends Task[U](stageId, stageAttemptId, partition.index, localProperties, serializedTaskMetrics,
     jobId, appId, appAttemptId, isBarrier)
   with Serializable {
@@ -71,6 +73,12 @@ private[spark] class ResultTask[T, U](
   @transient private[this] val preferredLocs: Seq[TaskLocation] = {
     if (locs == null) Nil else locs.distinct
   }
+
+  /**
+   * Custom modifications by jaken
+   * 继承Task父类的preferredSizes属性
+   */
+  override def preferredLocsAndSizes: IndexedSeq[(Seq[TaskLocation], Seq[Long])] = allLocsAndSize
 
   override def runTask(context: TaskContext): U = {
     // Deserialize the RDD and the func using the broadcast variables.
@@ -95,5 +103,7 @@ private[spark] class ResultTask[T, U](
 
   // override def toString: String = "ResultTask(" + stageId + ", " + partitionId + ")"
 
-  override def toString = s"ResultTask(stageId=$stageId,partitionId=$partitionId,preferredLocs=$preferredLocs)"
+  override def toString: String = s"ResultTask(appId=$appId,jobId=$jobId,stageId=$stageId," +
+    s"partitionId=$partitionId,preferredLocations=${preferredLocations},preferredLocsAndSizes=${preferredLocsAndSizes}" +
+    s" )"
 }

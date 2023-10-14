@@ -48,7 +48,7 @@ private[spark] class SortShuffleWriter[K, V, C](
   private val writeMetrics = context.taskMetrics().shuffleWriteMetrics
 
   /** Write a bunch of records to this task's output */
-  // 这个records 就是当前task的逻辑计算结果,是一个遍历RDD的迭代器,实际上并没有真正计算
+  // 这个records 就是当前task的逻辑计算结果,是一个遍历输入数据的迭代器,实际上并没有真正计算
   override def write(records: Iterator[Product2[K, V]]): Unit = {
     // 判断是否开启了map端的合并 aggregator参数会有所不同
     sorter = if (dep.mapSideCombine) {

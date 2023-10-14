@@ -325,9 +325,30 @@ class NewHadoopRDD[K, V](
   override def getPreferredLocations(hsplit: Partition): Seq[String] = {
     val split = hsplit.asInstanceOf[NewHadoopPartition].serializableHadoopSplit.value
     val locs = HadoopRDD.convertSplitLocationInfo(split.getLocationInfo)
-    logInfo(s"#####Partition_id =${hsplit.index},locs= ${locs},split.getLocations=${split.getLocations.mkString("Array(", ", ", ")")}#####")
+    // 打印分片的位置、长度信息
+    logInfo(s"#####Partition_id =${hsplit.index},locs= ${locs},partitionLength=${split.getLength},split.getLocations=${split.getLocations.mkString("Array(", ", ", ")")}#####")
     locs.getOrElse(split.getLocations.filter(_ != "localhost"))
   }
+
+  /**
+   * Custom modifications by jaken
+   * 获得hadoopRDD分区的位置和大小
+   */
+  override protected def getPreferredLocationsAndSizes(hsplit: Partition): (Seq[String], Seq[Long]) = {
+    val split = hsplit.asInstanceOf[NewHadoopPartition].serializableHadoopSplit.value
+    val locs = HadoopRDD.convertSplitLocationInfo(split.getLocationInfo)
+    // 打印分片的位置、长度信息
+    // logInfo(s"#####Partition_id =${hsplit.index},locs= ${locs},partitionLength=${split.getLength},split.getLocations=${split.getLocations.mkString("Array(", ", ", ")")}#####")
+    val partitionLength=split.getLength
+    // 创建和locs长度一样的数组 每个数组都用分区大小来填充
+    (locs.getOrElse(split.getLocations.filter(_ != "localhost")),Seq.fill(locs.map(_.size).getOrElse(0))(partitionLength))
+  }
+
+  /**
+   * Custom modifications by jaken
+   * 获得RDD分区的所在位置和大小
+   */
+
 
   override def persist(storageLevel: StorageLevel): this.type = {
     if (storageLevel.deserialized) {

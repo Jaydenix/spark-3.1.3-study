@@ -60,7 +60,10 @@ private[spark] class ShuffleMapTask(
                                      jobId: Option[Int] = None,
                                      appId: Option[String] = None,
                                      appAttemptId: Option[String] = None,
-                                     isBarrier: Boolean = false)
+                                     isBarrier: Boolean = false,
+                                     // 添加sizes变量 默认为Nil 注意放在参数的末尾位置 这样可以避免修改大量代码
+                                     @transient private var allLocsAndSize:IndexedSeq[(Seq[TaskLocation], Seq[Long])]=IndexedSeq.empty
+                                   )
   extends Task[MapStatus](stageId, stageAttemptId, partition.index, localProperties,
     serializedTaskMetrics, jobId, appId, appAttemptId, isBarrier)
     with Logging {
@@ -108,5 +111,14 @@ private[spark] class ShuffleMapTask(
 
   override def preferredLocations: Seq[TaskLocation] = preferredLocs
 
-  override def toString: String = "ShuffleMapTask(%d, %d)".format(stageId, partitionId)
+
+  /**
+   * Custom modifications by jaken
+   * 继承Task父类的preferredSizes属性
+   */
+  override def preferredLocsAndSizes: IndexedSeq[(Seq[TaskLocation], Seq[Long])] = allLocsAndSize
+
+  override def toString: String = s"ShuffleMapTask(appId=$appId,jobId=$jobId,stageId=$stageId," +
+    s"partitionId=$partitionId,preferredLocations=${preferredLocations},preferredLocsAndSizes=${preferredLocsAndSizes}" +
+    s" )"
 }

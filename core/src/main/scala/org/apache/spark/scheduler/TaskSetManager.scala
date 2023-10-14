@@ -1364,11 +1364,11 @@ private[spark] class TaskSetManager(
   override def toString: String = s"TaskSetManager(stageId=$stageId,name=$name,myLocalityLevels=${myLocalityLevels.mkString("Array(", ", ", ")")}," +
     s"currentLocalityIndex=$currentLocalityIndex,numTasks=$numTasks \n" +
     //    s"前10个tasks=${tasks.take(10).mkString("Array(", ", ", ")")}" +
-    s"前50个pendingTasks.forExecutor=${pendingTasks.forExecutor.take(50)}\n" +
-    s"前50个pendingTasks.forHost=${pendingTasks.forHost.take(50)}\n" +
-    s"前50个pendingTasks.noPrefs=${pendingTasks.noPrefs.take(50)}\n" +
-    s"前50个pendingTasks.forRack=${pendingTasks.forRack.take(50)}\n" +
-    s"前50个pendingTasks.all=${pendingTasks.all.take(50)}\n" +
+    s"前50个pendingTasks.forExecutor=\n${pendingTasks.forExecutor.take(50).mkString("\n")}\n" +
+    s"前50个pendingTasks.forHost=\n${pendingTasks.forHost.take(50).mkString("\n")}\n" +
+    s"前50个pendingTasks.noPrefs=\n${pendingTasks.noPrefs.take(50).mkString("\n")}\n" +
+    s"前50个pendingTasks.forRack=\n${pendingTasks.forRack.take(50).mkString("\n")}\n" +
+    s"前50个pendingTasks.all=\n${pendingTasks.all.take(50).mkString("\n")}\n" +
     s")"
 }
 

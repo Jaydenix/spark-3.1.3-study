@@ -984,8 +984,8 @@ private[spark] class BlockManager(
       None
     } else {
       val locationsAndStatus = locationsAndStatusOption.get
+      // 获取blockSize,每个block有两部分,一部分在磁盘,另一部分在内存中 在BlockStatus对象中记录了block的详细信息
       val blockSize = locationsAndStatus.status.diskSize.max(locationsAndStatus.status.memSize)
-
       locationsAndStatus.localDirs.flatMap { localDirs =>
         val blockDataOption =
           readDiskBlockFromSameHostExecutor(blockId, localDirs, locationsAndStatus.status.diskSize)
@@ -1162,12 +1162,12 @@ private[spark] class BlockManager(
   def get[T: ClassTag](blockId: BlockId): Option[BlockResult] = {
     val local = getLocalValues(blockId)
     if (local.isDefined) {
-      logInfo(s"Found block $blockId locally")
+      logInfo(s"Found block $blockId locally,bytes=${local.map(_.bytes).getOrElse(0L)}")
       return local
     }
     val remote = getRemoteValues[T](blockId)
     if (remote.isDefined) {
-      logInfo(s"Found block $blockId remotely")
+      logInfo(s"Found block $blockId remotely,bytes=${remote.map(_.bytes).getOrElse(0L)}")
       return remote
     }
     None

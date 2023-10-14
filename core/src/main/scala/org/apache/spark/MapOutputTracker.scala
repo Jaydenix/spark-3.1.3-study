@@ -269,6 +269,12 @@ private class ShuffleStatus(numPartitions: Int) extends Logging {
     }
     cachedSerializedMapStatus = null
   }
+
+  /**
+   * Custom modifications by jaken
+   *
+   */
+  override def toString = s"ShuffleStatus(${mapStatuses.mkString("Array(", ", ", ")")})"
 }
 
 private[spark] sealed trait MapOutputTrackerMessage
@@ -483,6 +489,7 @@ private[spark] class MapOutputTrackerMaster(
   }
 
   def registerShuffle(shuffleId: Int, numMaps: Int): Unit = {
+    // 注册shuffleStatus
     if (shuffleStatuses.put(shuffleId, new ShuffleStatus(numMaps)).isDefined) {
       throw new IllegalArgumentException("Shuffle ID " + shuffleId + " registered twice")
     }
@@ -658,6 +665,28 @@ private[spark] class MapOutputTrackerMaster(
   }
 
   /**
+   * Custom modifications by jaken
+   *
+   */
+  def getPreferredLocationsAndSizesForShuffle(dep: ShuffleDependency[_, _, _], partitionId: Int)
+  : (Seq[String],Seq[Long]) = {
+    if (shuffleLocalityEnabled && dep.rdd.partitions.length < SHUFFLE_PREF_MAP_THRESHOLD &&
+      dep.partitioner.numPartitions < SHUFFLE_PREF_REDUCE_THRESHOLD) {
+      // 得到blockManager的id
+      val (blockManagerIds,partitionSizes) = getLocationsAndSizesWithLargestOutputs(dep.shuffleId, partitionId,
+        dep.partitioner.numPartitions, REDUCER_PREF_LOCS_FRACTION)
+      if (blockManagerIds.nonEmpty) {
+        // 返回blockManager所在的host以及partition的大小
+        (blockManagerIds.get.map(_.host),partitionSizes.get)
+      } else {
+        (Nil,Nil)
+      }
+    } else {
+      (Nil,Nil)
+    }
+  }
+
+  /**
    * Return a list of locations that each have fraction of map output greater than the specified
    * threshold.
    *
@@ -693,7 +722,7 @@ private[spark] class MapOutputTrackerMaster(
             if (status != null) {
               // 根据reduce任务的partitionId,来找mapTask完成结果中属于reduce任务的那部分
               val blockSize = status.getSizeForBlock(reducerId)
-              logInfo(s"#####status.mapId=${status.mapId},status.blockManagerId=${status.location},blockSize[${reducerId}]=${blockSize}#####")
+              // logInfo(s"#####status.mapId=${status.mapId},status.blockManagerId=${status.location},blockSize[${reducerId}]=${blockSize}#####")
               if (blockSize > 0) {
                 locs(status.location) = locs.getOrElse(status.location, 0L) + blockSize
                 totalOutputSize += blockSize
@@ -701,7 +730,7 @@ private[spark] class MapOutputTrackerMaster(
             }
             mapIdx = mapIdx + 1
           }
-          logInfo(s"#####reduceTaskPartitionId=${reducerId},totalOutputSize=${totalOutputSize}#####")
+          logInfo(s"#####DownStreamTaskPartitionId=${reducerId},DownStreamInputSize=${totalOutputSize}#####")
           // 如果存在某些任务块中的数据 / reduce任务需要的总数据 < 阈值(默认0.2),表示当前块中的数据量太小,不将其考虑到影响数据本地性的因素中
           val topLocs = locs.filter { case (loc, size) =>
             size.toDouble / totalOutputSize >= fractionThreshold
@@ -714,6 +743,59 @@ private[spark] class MapOutputTrackerMaster(
       }
     }
     None
+  }
+
+  /**
+   * Custom modifications by jaken
+   *
+   */
+  def getLocationsAndSizesWithLargestOutputs(
+                                      shuffleId: Int,
+                                      reducerId: Int,
+                                      numReducers: Int,
+                                      fractionThreshold: Double)
+  : (Option[Array[BlockManagerId]],Option[Array[Long]]) = {
+    // 获取shuffleStatus 里面存放了ShuffleMapTask的完成情况MapStatus
+    val shuffleStatus = shuffleStatuses.get(shuffleId).orNull
+    if (shuffleStatus != null) {
+      shuffleStatus.withMapStatuses { statuses =>
+        if (statuses.nonEmpty) {
+          // HashMap to add up sizes of all blocks at the same location
+          val locs = new HashMap[BlockManagerId, Long]
+          // reduce任务的总数据大小
+          var totalOutputSize = 0L
+          var mapIdx = 0
+          // 遍历一个shuffleStatus的所有MapStatus,每一个MapStatus都代表一个mapTask的完成结果
+          while (mapIdx < statuses.length) {
+            val status = statuses(mapIdx)
+            // status may be null here if we are called between registerShuffle, which creates an
+            // array with null entries for each output, and registerMapOutputs, which populates it
+            // with valid status entries. This is possible if one thread schedules a job which
+            // depends on an RDD which is currently being computed by another thread.
+            if (status != null) {
+              // 根据reduce任务的partitionId,来找mapTask完成结果中属于reduce任务的那部分
+              val blockSize = status.getSizeForBlock(reducerId)
+              // logInfo(s"#####status.mapId=${status.mapId},status.blockManagerId=${status.location},blockSize[${reducerId}]=${blockSize}#####")
+              if (blockSize > 0) {
+                locs(status.location) = locs.getOrElse(status.location, 0L) + blockSize
+                totalOutputSize += blockSize
+              }
+            }
+            mapIdx = mapIdx + 1
+          }
+          logInfo(s"#####DownStreamTaskPartitionId=${reducerId},DownStreamInputSize=${totalOutputSize}#####")
+          // 如果存在某些任务块中的数据 / reduce任务需要的总数据 < 阈值(默认0.2),表示当前块中的数据量太小,不将其考虑到影响数据本地性的因素中
+          val topLocs = locs.filter { case (loc, size) =>
+            size.toDouble / totalOutputSize >= fractionThreshold
+          }
+          // Return if we have any locations which satisfy the required threshold
+          if (topLocs.nonEmpty) {
+            return (Some(topLocs.keys.toArray),Some(topLocs.values.toArray))
+          }
+        }
+      }
+    }
+    (None,None)
   }
 
   /**

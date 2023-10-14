@@ -773,6 +773,7 @@ private[spark] class BlockManagerInfo(
     val maxOnHeapMem: Long,
     val maxOffHeapMem: Long,
     val storageEndpoint: RpcEndpointRef,
+    // 外部shuffle服务
     val externalShuffleServiceBlockStatus: Option[JHashMap[BlockId, BlockStatus]])
   extends Logging {
 

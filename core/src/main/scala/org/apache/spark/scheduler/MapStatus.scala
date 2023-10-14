@@ -153,6 +153,8 @@ private[spark] class CompressedMapStatus(
     in.readFully(compressedSizes)
     _mapTaskId = in.readLong()
   }
+
+  override def toString = s"CompressedMapStatus(mapTaskId=$mapId,blockManagerId=$loc, block=${compressedSizes.map(MapStatus.decompressSize).mkString("Array(", ", ", ")")})"
 }
 
 /**
@@ -231,6 +233,8 @@ private[spark] class HighlyCompressedMapStatus private (
     hugeBlockSizes = hugeBlockSizesImpl
     _mapTaskId = in.readLong()
   }
+
+  override def toString = s"HighlyCompressedMapStatus($loc, $numNonEmptyBlocks, $emptyBlocks, $hugeBlockSizes, $mapId)"
 }
 
 private[spark] object HighlyCompressedMapStatus {

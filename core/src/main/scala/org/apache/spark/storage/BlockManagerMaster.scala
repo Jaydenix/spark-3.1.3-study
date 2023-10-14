@@ -98,16 +98,18 @@ class BlockManagerMaster(
     driverEndpoint.askSync[Seq[BlockManagerId]](GetLocations(blockId))
   }
 
-  /** Get locations as well as status of the blockId from the driver */
+  /** Get locations as well as status of the blockId from the driver 从driver获得block的位置和信息*/
   def getLocationsAndStatus(
       blockId: BlockId,
       requesterHost: String): Option[BlockLocationsAndStatus] = {
+    // 向driver自己发送GetLocationsAndStatus消息
     driverEndpoint.askSync[Option[BlockLocationsAndStatus]](
       GetLocationsAndStatus(blockId, requesterHost))
   }
 
   /** Get locations of multiple blockIds from the driver */
   def getLocations(blockIds: Array[BlockId]): IndexedSeq[Seq[BlockManagerId]] = {
+    // 向driver发送 获取blockId数组的位置 的GetLocationsMultipleBlockIds消息
     driverEndpoint.askSync[IndexedSeq[Seq[BlockManagerId]]](
       GetLocationsMultipleBlockIds(blockIds))
   }

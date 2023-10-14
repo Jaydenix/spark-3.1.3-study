@@ -141,6 +141,12 @@ abstract class RDD[T: ClassTag](
    */
   protected def getPreferredLocations(split: Partition): Seq[String] = Nil
 
+  /**
+   * Custom modifications by jaken
+   * 获得RDD分区的位置和大小
+   */
+  protected def getPreferredLocationsAndSizes(split: Partition): (Seq[String],Seq[Long]) = (Nil,Nil)
+
   /** Optionally overridden by subclasses to specify how they are partitioned. */
   @transient val partitioner: Option[Partitioner] = None
 
@@ -327,12 +333,24 @@ abstract class RDD[T: ClassTag](
   }
 
   /**
+   * Custom modifications by jaken
+   * 返回的是partition的位置和大小
+   */
+  final def preferredLocationsAndSizes(split: Partition): (Seq[String],Seq[Long]) = {
+    checkpointRDD.map(_.getPreferredLocationsAndSizes(split)).getOrElse {
+      getPreferredLocationsAndSizes(split)
+    }
+  }
+
+  /**
    * Internal method to this RDD; will read from cache if applicable, or otherwise compute it.
    * This should ''not'' be called by users directly, but is available for implementers of custom
    * subclasses of RDD.
+   *
+   * 返回的Iterator遍历的是分区中的数据
    */
   final def iterator(split: Partition, context: TaskContext): Iterator[T] = {
-    // StorageLevel.NONE 说明当前任务的末尾RDD有缓存
+    // !=StorageLevel.NONE 说明当前任务的末尾RDD有缓存
     if (storageLevel != StorageLevel.NONE) {
       getOrCompute(split, context)
     } else {
@@ -345,6 +363,8 @@ abstract class RDD[T: ClassTag](
    * Return the ancestors of the given RDD that are related to it only through a sequence of
    * narrow dependencies. This traverses the given RDD's dependency tree using DFS, but maintains
    * no ordering on the RDDs returned.
+   *
+   * 获得窄依赖的祖先
    */
   private[spark] def getNarrowAncestors: Seq[RDD[_]] = {
     val ancestors = new mutable.HashSet[RDD[_]]

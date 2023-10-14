@@ -628,6 +628,7 @@ private[spark] class Executor(
         val resultSize = serializedDirectResult.limit()
 
         // directSend = sending directly back to the driver
+        // 根据任务的执行结果大小决定将其舍弃/放入blockManager/直接发送给driver
         val serializedResult: ByteBuffer = {
           if (maxResultSize > 0 && resultSize > maxResultSize) {
             logWarning(s"Finished $taskName. Result is larger than maxResultSize " +

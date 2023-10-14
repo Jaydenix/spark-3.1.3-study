@@ -59,8 +59,9 @@ private[spark] class ShuffleWriteProcessor extends Serializable with Logging {
         context,
         createMetricsReporter(context))
       // 该方法中包括了从上一阶段或者外部文件系统中读数据、执行逻辑计算、写数据的方法
+      // shuffleWrite入口
       writer.write(
-        // rdd.iterator这是shuffleRead的入口,rdd.iterator就是执行逻辑计算
+        // rdd.iterator这是shuffleRead入口,rdd.iterator就是执行逻辑计算
         rdd.iterator(partition, context).asInstanceOf[Iterator[_ <: Product2[Any, Any]]])
       // 返回MapStatus对象
       writer.stop(success = true).get

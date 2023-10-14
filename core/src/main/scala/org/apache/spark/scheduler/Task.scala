@@ -190,6 +190,12 @@ private[spark] abstract class Task[T](
   // TaskLocation记录了任务对应的数据的存放地
   def preferredLocations: Seq[TaskLocation] = Nil
 
+  /**
+   * Custom modifications by jaken
+   * 加入sizes属性
+   */
+  def preferredLocsAndSizes: IndexedSeq[(Seq[TaskLocation], Seq[Long])] = IndexedSeq.empty
+
   // Map output tracker epoch. Will be set by TaskSetManager.
   var epoch: Long = -1
 
@@ -253,7 +259,9 @@ private[spark] abstract class Task[T](
     }
   }
 
-  override def toString: String = s"Task(appId=$appId,jobId=$jobId,stageId=$stageId,partitionId=$partitionId,stageAttemptId=$stageAttemptId," +
+  override def toString: String = s"Task(appId=$appId,jobId=$jobId,stageId=$stageId," +
+    s"partitionId=$partitionId,preferredLocations=${preferredLocations},preferredLocsAndSizes=${preferredLocsAndSizes}" +
+    s"stageAttemptId=$stageAttemptId," +
     s"localProperties=$localProperties,taskMemoryManager$taskMemoryManager, context=$context, taskThread=$taskThread," +
     s" )"
 }

@@ -96,8 +96,23 @@ class ShuffledRDD[K: ClassTag, V: ClassTag, C: ClassTag](
   override protected def getPreferredLocations(partition: Partition): Seq[String] = {
     // 获得MapOutputTrackerMaster
     val tracker = SparkEnv.get.mapOutputTracker.asInstanceOf[MapOutputTrackerMaster]
+    // 根据dependencies来找到shuffleId
     val dep = dependencies.head.asInstanceOf[ShuffleDependency[K, V, C]]
     tracker.getPreferredLocationsForShuffle(dep, partition.index)
+  }
+
+
+  /**
+   * Custom modifications by jaken
+   * 获得RDD分区的位置和大小
+   */
+  override protected def getPreferredLocationsAndSizes(partition: Partition): (Seq[String], Seq[Long]) = {
+    // 获得MapOutputTrackerMaster
+    val tracker = SparkEnv.get.mapOutputTracker.asInstanceOf[MapOutputTrackerMaster]
+    // 根据dependencies来找到shuffleId
+    val dep = dependencies.head.asInstanceOf[ShuffleDependency[K, V, C]]
+    // 自写方法 返回分区对应的位置和大小
+    tracker.getPreferredLocationsAndSizesForShuffle(dep, partition.index)
   }
 
   override def compute(split: Partition, context: TaskContext): Iterator[(K, C)] = {
