@@ -192,9 +192,15 @@ private[spark] abstract class Task[T](
 
   /**
    * Custom modifications by jaken
-   * 加入sizes属性
+   * 加入preferredLocsAndSizes属性
    */
   def preferredLocsAndSizes: IndexedSeq[(Seq[TaskLocation], Seq[Long])] = IndexedSeq.empty
+
+  /**
+   * Custom modifications by jaken
+   * 加入任务总数据大小属性
+   */
+  def taskSize: Long = 0
 
   // Map output tracker epoch. Will be set by TaskSetManager.
   var epoch: Long = -1

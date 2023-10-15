@@ -223,6 +223,49 @@ private[spark] class TaskSetManager(
   }
 
   /**
+   * Custom modifications by jaken
+   * sort queue by task.allSize
+   */
+  DescSortPendingTasks()
+  private def DescSortPendingTasks(speculatable: Boolean = false): Unit = {
+    logInfo(s"============降序排序前============")
+    logInfo(s"前50个pendingTasks.forExecutor=\n${pendingTasks.forExecutor.take(50).mkString("\n")}\n" +
+      s"前50个pendingTasks.forHost=\n${pendingTasks.forHost.take(50).mkString("\n")}\n" +
+      s"前50个pendingTasks.noPrefs=\n${pendingTasks.noPrefs.take(50)}\n" +
+      s"前50个pendingTasks.forRack=\n${pendingTasks.forRack.take(50).mkString("\n")}\n" +
+      s"前50个pendingTasks.all=\n${pendingTasks.all.take(50)}\n")
+    if (isZombie) return
+    val pendingTaskSetToAddTo = if (speculatable) pendingSpeculatableTasks else pendingTasks
+    pendingTaskSetToAddTo.forExecutor.foreach {
+      case (executorName, taskIds) => {
+        // 加个负号表示降序
+        pendingTaskSetToAddTo.forExecutor(executorName) = taskIds.sortBy(index => -tasks(index).taskSize)
+      }
+    }
+    pendingTaskSetToAddTo.forHost.foreach{
+      case (hostName,taskIds) => {
+        // 加个负号表示降序
+        pendingTaskSetToAddTo.forHost(hostName)=taskIds.sortBy(index => -tasks(index).taskSize)
+      }
+    }
+    pendingTaskSetToAddTo.forRack.foreach {
+      case (rackName, taskIds) => {
+        // 加个负号表示降序
+        pendingTaskSetToAddTo.forRack(rackName) = taskIds.sortBy(index => -tasks(index).taskSize)
+      }
+    }
+    pendingTaskSetToAddTo.noPrefs = pendingTaskSetToAddTo.noPrefs.sortBy(index => -tasks(index).taskSize)
+    pendingTaskSetToAddTo.noPrefs = pendingTaskSetToAddTo.all.sortBy(index => -tasks(index).taskSize)
+
+    logInfo(s"============降序排序后============")
+    logInfo(s"前50个pendingTasks.forExecutor=\n${pendingTasks.forExecutor.take(50).mkString("\n")}\n" +
+      s"前50个pendingTasks.forHost=\n${pendingTasks.forHost.take(50).mkString("\n")}\n" +
+      s"前50个pendingTasks.noPrefs=\n${pendingTasks.noPrefs.take(50)}\n" +
+      s"前50个pendingTasks.forRack=\n${pendingTasks.forRack.take(50).mkString("\n")}\n" +
+      s"前50个pendingTasks.all=\n${pendingTasks.all.take(50)}\n")
+  }
+
+  /**
    * Track the set of locality levels which are valid given the tasks locality preferences and
    * the set of currently available executors.  This is updated as executors are added and removed.
    * This allows a performance optimization, of skipping levels that aren't relevant (e.g., skip
@@ -1366,9 +1409,9 @@ private[spark] class TaskSetManager(
     //    s"前10个tasks=${tasks.take(10).mkString("Array(", ", ", ")")}" +
     s"前50个pendingTasks.forExecutor=\n${pendingTasks.forExecutor.take(50).mkString("\n")}\n" +
     s"前50个pendingTasks.forHost=\n${pendingTasks.forHost.take(50).mkString("\n")}\n" +
-    s"前50个pendingTasks.noPrefs=\n${pendingTasks.noPrefs.take(50).mkString("\n")}\n" +
+    s"前50个pendingTasks.noPrefs=\n${pendingTasks.noPrefs.take(50)}\n" +
     s"前50个pendingTasks.forRack=\n${pendingTasks.forRack.take(50).mkString("\n")}\n" +
-    s"前50个pendingTasks.all=\n${pendingTasks.all.take(50).mkString("\n")}\n" +
+    s"前50个pendingTasks.all=\n${pendingTasks.all.take(50)}\n" +
     s")"
 }
 
@@ -1402,9 +1445,9 @@ private[scheduler] class PendingTasksByLocality {
   // Set of pending tasks for each host. Similar to pendingTasksForExecutor, but at host level.
   val forHost = new HashMap[String, ArrayBuffer[Int]]
   // Set containing pending tasks with no locality preferences.
-  val noPrefs = new ArrayBuffer[Int]
+  var noPrefs = new ArrayBuffer[Int]
   // Set of pending tasks for each rack -- similar to the above.
   val forRack = new HashMap[String, ArrayBuffer[Int]]
   // Set containing all pending tasks (also used as a stack, as above).
-  val all = new ArrayBuffer[Int]
+  var all = new ArrayBuffer[Int]
 }

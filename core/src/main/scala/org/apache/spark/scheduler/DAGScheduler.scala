@@ -1880,12 +1880,23 @@ private[spark] class DAGScheduler(
             // 得到任务的数据本地性，一个任务就对应一个分区
             val locs = taskIdToLocationsAndSizes(id)(nativeIndex)._1
             val allLocsAndSize = taskIdToLocationsAndSizes(id)
+            var allSize :Long = 0
+            for (i <- allLocsAndSize.indices) {
+              if(i==0 && allLocsAndSize(i)._2.nonEmpty) allSize += allLocsAndSize(i)._2.head
+              else {
+                if(allLocsAndSize(i)._2.nonEmpty) {
+                  for (size <- allLocsAndSize(i)._2) {
+                    allSize += size
+                  }
+                }
+              }
+            }
             // val sizes = taskIdToLocationsAndSizes(id)._2
             val part = partitions(id)
             stage.pendingPartitions += id
             new ShuffleMapTask(stage.id, stage.latestInfo.attemptNumber,
               taskBinary, part, locs, properties, serializedTaskMetrics, Option(jobId),
-              Option(sc.applicationId), sc.applicationAttemptId, stage.rdd.isBarrier(), allLocsAndSize)
+              Option(sc.applicationId), sc.applicationAttemptId, stage.rdd.isBarrier(), allLocsAndSize, allSize)
           }
 
         case stage: ResultStage =>
@@ -1895,10 +1906,21 @@ private[spark] class DAGScheduler(
             val locs = taskIdToLocationsAndSizes(id)(nativeIndex)._1
             val allLocsAndSize = taskIdToLocationsAndSizes(id)
             // val sizes = taskIdToLocationsAndSizes(id)._2
+            var allSize: Long = 0
+            for (i <- allLocsAndSize.indices) {
+              if (i == 0 && allLocsAndSize(i)._2.nonEmpty) allSize += allLocsAndSize(i)._2.head
+              else {
+                if (allLocsAndSize(i)._2.nonEmpty) {
+                  for (size <- allLocsAndSize(i)._2) {
+                    allSize += size
+                  }
+                }
+              }
+            }
             new ResultTask(stage.id, stage.latestInfo.attemptNumber,
               taskBinary, part, locs, id, properties, serializedTaskMetrics,
               Option(jobId), Option(sc.applicationId), sc.applicationAttemptId,
-              stage.rdd.isBarrier(), allLocsAndSize)
+              stage.rdd.isBarrier(), allLocsAndSize,allSize)
           }
       }
     } catch {
@@ -1907,7 +1929,7 @@ private[spark] class DAGScheduler(
         runningStages -= stage
         return
     }
-    logInfo(s"#####将stage=${stage}拆分成了tasks序列,前10个task为 \n${tasks.take(10).mkString("\n")}#####")
+    logInfo(s"#####将stage=${stage}拆分成了tasks序列,前20个task为 \n${tasks.take(20).mkString("\n")}#####")
     if (tasks.nonEmpty) {
       logInfo(s"Submitting ${tasks.size} missing tasks from $stage (${stage.rdd}) (first 15 " +
         s"tasks are for partitions ${tasks.take(15).map(_.partitionId)})")

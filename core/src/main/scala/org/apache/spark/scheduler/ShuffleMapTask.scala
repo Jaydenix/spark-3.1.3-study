@@ -61,8 +61,10 @@ private[spark] class ShuffleMapTask(
                                      appId: Option[String] = None,
                                      appAttemptId: Option[String] = None,
                                      isBarrier: Boolean = false,
-                                     // 添加sizes变量 默认为Nil 注意放在参数的末尾位置 这样可以避免修改大量代码
-                                     @transient private var allLocsAndSize:IndexedSeq[(Seq[TaskLocation], Seq[Long])]=IndexedSeq.empty
+                                     // 添加allLocsAndSize变量 默认为Nil 注意放在参数的末尾位置 这样可以避免修改大量代码
+                                     @transient private var allLocsAndSize:IndexedSeq[(Seq[TaskLocation], Seq[Long])]=IndexedSeq.empty,
+                                     // 添加allSize变量，表示任务的数据总大小
+                                     allSize: Long = 0
                                    )
   extends Task[MapStatus](stageId, stageAttemptId, partition.index, localProperties,
     serializedTaskMetrics, jobId, appId, appAttemptId, isBarrier)
@@ -118,7 +120,13 @@ private[spark] class ShuffleMapTask(
    */
   override def preferredLocsAndSizes: IndexedSeq[(Seq[TaskLocation], Seq[Long])] = allLocsAndSize
 
+  /**
+   * Custom modifications by jaken
+   * 加入任务总数据大小属性
+   */
+  override def taskSize: Long = allSize
+
   override def toString: String = s"ShuffleMapTask(appId=$appId,jobId=$jobId,stageId=$stageId," +
-    s"partitionId=$partitionId,preferredLocations=${preferredLocations},preferredLocsAndSizes=${preferredLocsAndSizes}" +
+    s"partitionId=$partitionId,preferredLocations=${preferredLocations},allSize = ${allSize},preferredLocsAndSizes=${preferredLocsAndSizes}" +
     s" )"
 }

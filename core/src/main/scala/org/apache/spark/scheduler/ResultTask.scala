@@ -31,44 +31,47 @@ import org.apache.spark.rdd.RDD
  *
  * See [[Task]] for more information.
  *
- * @param stageId id of the stage this task belongs to
- * @param stageAttemptId attempt id of the stage this task belongs to
- * @param taskBinary broadcasted version of the serialized RDD and the function to apply on each
- *                   partition of the given RDD. Once deserialized, the type should be
- *                   (RDD[T], (TaskContext, Iterator[T]) => U).
- * @param partition partition of the RDD this task is associated with
- * @param locs preferred task execution locations for locality scheduling
- * @param outputId index of the task in this job (a job can launch tasks on only a subset of the
- *                 input RDD's partitions).
- * @param localProperties copy of thread-local properties set by the user on the driver side.
+ * @param stageId               id of the stage this task belongs to
+ * @param stageAttemptId        attempt id of the stage this task belongs to
+ * @param taskBinary            broadcasted version of the serialized RDD and the function to apply on each
+ *                              partition of the given RDD. Once deserialized, the type should be
+ *                              (RDD[T], (TaskContext, Iterator[T]) => U).
+ * @param partition             partition of the RDD this task is associated with
+ * @param locs                  preferred task execution locations for locality scheduling
+ * @param outputId              index of the task in this job (a job can launch tasks on only a subset of the
+ *                              input RDD's partitions).
+ * @param localProperties       copy of thread-local properties set by the user on the driver side.
  * @param serializedTaskMetrics a `TaskMetrics` that is created and serialized on the driver side
  *                              and sent to executor side.
  *
- * The parameters below are optional:
- * @param jobId id of the job this task belongs to
- * @param appId id of the app this task belongs to
- * @param appAttemptId attempt id of the app this task belongs to
- * @param isBarrier whether this task belongs to a barrier stage. Spark must launch all the tasks
- *                  at the same time for a barrier stage.
+ *                              The parameters below are optional:
+ * @param jobId                 id of the job this task belongs to
+ * @param appId                 id of the app this task belongs to
+ * @param appAttemptId          attempt id of the app this task belongs to
+ * @param isBarrier             whether this task belongs to a barrier stage. Spark must launch all the tasks
+ *                              at the same time for a barrier stage.
  */
 private[spark] class ResultTask[T, U](
-    stageId: Int,
-    stageAttemptId: Int,
-    taskBinary: Broadcast[Array[Byte]],
-    partition: Partition,
-    locs: Seq[TaskLocation],
-    val outputId: Int,
-    localProperties: Properties,
-    serializedTaskMetrics: Array[Byte],
-    jobId: Option[Int] = None,
-    appId: Option[String] = None,
-    appAttemptId: Option[String] = None,
-    isBarrier: Boolean = false,
-    // 添加sizes变量 默认为Nil 注意放在参数的末尾位置 这样可以避免修改大量代码
-    allLocsAndSize:IndexedSeq[(Seq[TaskLocation], Seq[Long])]=IndexedSeq.empty)
+                                       stageId: Int,
+                                       stageAttemptId: Int,
+                                       taskBinary: Broadcast[Array[Byte]],
+                                       partition: Partition,
+                                       locs: Seq[TaskLocation],
+                                       val outputId: Int,
+                                       localProperties: Properties,
+                                       serializedTaskMetrics: Array[Byte],
+                                       jobId: Option[Int] = None,
+                                       appId: Option[String] = None,
+                                       appAttemptId: Option[String] = None,
+                                       isBarrier: Boolean = false,
+                                       // 添加sizes变量 默认为Nil 注意放在参数的末尾位置 这样可以避免修改大量代码
+                                       allLocsAndSize: IndexedSeq[(Seq[TaskLocation], Seq[Long])] = IndexedSeq.empty,
+                                       // 添加allSize变量，表示任务的数据总大小
+                                       allSize: Long = 0
+                                     )
   extends Task[U](stageId, stageAttemptId, partition.index, localProperties, serializedTaskMetrics,
     jobId, appId, appAttemptId, isBarrier)
-  with Serializable {
+    with Serializable {
 
   @transient private[this] val preferredLocs: Seq[TaskLocation] = {
     if (locs == null) Nil else locs.distinct
@@ -76,9 +79,16 @@ private[spark] class ResultTask[T, U](
 
   /**
    * Custom modifications by jaken
-   * 继承Task父类的preferredSizes属性
+   * 继承Task父类的preferredSizes属性,该属性在taskSetManager中 将任务放置在相应队列时需要使用
    */
   override def preferredLocsAndSizes: IndexedSeq[(Seq[TaskLocation], Seq[Long])] = allLocsAndSize
+
+
+  /**
+   * Custom modifications by jaken
+   * 加入任务总数据大小属性
+   */
+  override def taskSize: Long = allSize
 
   override def runTask(context: TaskContext): U = {
     // Deserialize the RDD and the func using the broadcast variables.
@@ -104,6 +114,6 @@ private[spark] class ResultTask[T, U](
   // override def toString: String = "ResultTask(" + stageId + ", " + partitionId + ")"
 
   override def toString: String = s"ResultTask(appId=$appId,jobId=$jobId,stageId=$stageId," +
-    s"partitionId=$partitionId,preferredLocations=${preferredLocations},preferredLocsAndSizes=${preferredLocsAndSizes}" +
+    s"partitionId=$partitionId,preferredLocations=${preferredLocations},allSize = ${allSize},preferredLocsAndSizes=${preferredLocsAndSizes}" +
     s" )"
 }
