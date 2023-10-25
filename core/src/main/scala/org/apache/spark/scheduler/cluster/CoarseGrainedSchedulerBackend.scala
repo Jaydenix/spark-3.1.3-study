@@ -74,6 +74,7 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
   // protected by `CoarseGrainedSchedulerBackend.this`. Besides, `executorDataMap` should only
   // be modified in the inherited methods from ThreadSafeRpcEndpoint with protection by
   // `CoarseGrainedSchedulerBackend.this`.
+  // executorID -> ExecutorData
   private val executorDataMap = new HashMap[String, ExecutorData]
 
   // Number of executors for each ResourceProfile requested by the cluster
@@ -151,9 +152,12 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
       case StatusUpdate(executorId, taskId, state, data, resources) =>
         logInfo(s"=====driver处理消息13 StatusUpdate:executorId=${executorId},taskId=${taskId}," +
           s"state=${state}======")
+        // 进入这个方法 跟踪data中的任务数据 以及 metrics数据流向
         scheduler.statusUpdate(taskId, state, data.value)
+
         // 如果收到的是任务状态完成的消息
         if (TaskState.isFinished(state)) {
+          // 这里更新executor的相关信息 所以可以在这里尝试计算executor的性能权重
           executorDataMap.get(executorId) match {
             // 更新Driver记录的executor信息
             case Some(executorInfo) =>

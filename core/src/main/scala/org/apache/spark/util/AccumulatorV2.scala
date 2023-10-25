@@ -366,6 +366,8 @@ class LongAccumulator extends AccumulatorV2[jl.Long, jl.Long] {
   private[spark] def setValue(newValue: Long): Unit = _sum = newValue
 
   override def value: jl.Long = _sum
+
+  override def toString = s"LongAccumulator($count, $sum, $avg)"
 }
 
 

@@ -265,6 +265,10 @@ class TaskMetrics private[spark] () extends Serializable {
     // value will be updated at driver side.
     internalAccums.filter(a => !a.isZero || a == _resultSize)
   }
+
+  override def toString = s"TaskMetrics(executorRunTime=$executorRunTime, executorCpuTime=$executorCpuTime, " +
+    s"executorDeserializeTime=$executorDeserializeTime, executorDeserializeCpuTime=$executorDeserializeCpuTime, resultSize=$resultSize, " +
+    s"memoryBytesSpilled=$memoryBytesSpilled, diskBytesSpilled=$diskBytesSpilled, accumulators=$accumulators())"
 }
 
 
@@ -312,6 +316,7 @@ private[spark] object TaskMetrics extends Logging {
   /**
    * Construct a [[TaskMetrics]] object from a list of accumulator updates, called on driver only.
    */
+  // 创建taskaMetrics对象并且合并累加器中的信息
   def fromAccumulators(accums: Seq[AccumulatorV2[_, _]]): TaskMetrics = {
     val tm = new TaskMetrics
     for (acc <- accums) {

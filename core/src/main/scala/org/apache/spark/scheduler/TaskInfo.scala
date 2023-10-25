@@ -122,4 +122,7 @@ class TaskInfo(
   }
 
   private[spark] def timeRunning(currentTime: Long): Long = currentTime - launchTime
+
+  override def toString: String = s"TaskInfo(taskId=$taskId, index=$index, duration=$duration, executorId=$executorId, host=$host," +
+    s" taskLocality=$taskLocality, finished=$finished, successful=$successful, status=$status)"
 }

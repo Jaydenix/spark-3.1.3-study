@@ -74,8 +74,9 @@ private[spark] class MetricsSystem private (
   extends Logging {
 
   private[this] val metricsConfig = new MetricsConfig(conf)
-
+  // sink 槽 表示将统计的数据送到哪去 也就是目的地
   private val sinks = new mutable.ArrayBuffer[Sink]
+  // source 源 表示统计的 数据从哪里来
   private val sources = new mutable.ArrayBuffer[Source]
   private val registry = new MetricRegistry()
 
