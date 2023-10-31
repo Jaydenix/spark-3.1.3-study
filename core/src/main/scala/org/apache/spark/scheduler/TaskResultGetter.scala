@@ -58,7 +58,8 @@ private[spark] class TaskResultGetter(sparkEnv: SparkEnv, scheduler: TaskSchedul
       taskSetManager: TaskSetManager,
       tid: Long,
       serializedData: ByteBuffer): Unit = {
-    // 会调用一个线程来执行下面的代码
+    // 会调用一个线程来执行下面的代码，正是因为调用线程执行了 更新完成任务的信息
+    // 所以才会导致 针对该任务完成的对单个executor的任务调度已经开始了 但是任务的successful状态还没有更新好
     getTaskResultExecutor.execute(new Runnable {
       override def run(): Unit = Utils.logUncaughtExceptions {
         try {

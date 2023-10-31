@@ -148,11 +148,13 @@ private[spark] class TaskSchedulerImpl(
   // The set of executors we have on each host; this is used to compute hostsAlive, which
   // in turn is used to decide when we can attain data locality on a given host
   // 主机上的executor的映射
-  protected val hostToExecutors = new HashMap[String, HashSet[String]]
+  // 需要在taskset中使用 来计算节点之间的性能差异 取出其修饰 protected
+  val hostToExecutors = new HashMap[String, HashSet[String]]
 
   protected val hostsByRack = new HashMap[String, HashSet[String]]
 
-  protected val executorIdToHost = new HashMap[String, String]
+  // 需要在taskset中使用 来计算节点之间的性能差异 取出其修饰 protected
+  val executorIdToHost = new HashMap[String, String]
 
   private val abortTimer = new Timer(true)
   // Exposed for testing
@@ -470,7 +472,7 @@ private[spark] class TaskSchedulerImpl(
         //logInfo(s"=====当前executor:$execId $host=====")
         //logInfo(s">>>>>五.<开始>遍历除CPU外的每种资源 >>>>>")
         if(taskResAssignmentsOpt.isDefined) logInfo(s"#####executor:${execId}满足CPU要求后的其他资源分配方案taskResAssignmentsOpt=${taskResAssignmentsOpt}#####")
-        else logInfo(s"#####当前executor:${execId},CPU资源不满足运行一个任务的最低要求,跳过#####")
+        else logInfo(s"#####当前execId=${execId},host=${host},CPU资源不满足运行一个任务的最低要求,跳过#####")
         taskResAssignmentsOpt.foreach { taskResAssignments =>
           try {
             val prof = sc.resourceProfileManager.resourceProfileFromId(taskSetRpID)

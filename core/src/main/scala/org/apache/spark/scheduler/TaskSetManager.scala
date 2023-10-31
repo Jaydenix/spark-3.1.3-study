@@ -30,6 +30,7 @@ import org.apache.spark.internal.{Logging, config}
 import org.apache.spark.internal.config._
 import org.apache.spark.resource.ResourceInformation
 import org.apache.spark.scheduler.SchedulingMode._
+import org.apache.spark.scheduler.TaskLocality._
 import org.apache.spark.util.{AccumulatorV2, Clock, LongAccumulator, SystemClock, Utils}
 import org.apache.spark.util.collection.MedianHeap
 
@@ -211,9 +212,10 @@ private[spark] class TaskSetManager(
   private val unscheduledTaskCount = new HashMap[String, Int]
 
   initUnscheduledTaskCount()
-  private def initUnscheduledTaskCount():Unit = {
+
+  private def initUnscheduledTaskCount(): Unit = {
     for (elem <- pendingTasks.forExecutor) {
-      unscheduledTaskCount.getOrElseUpdate(elem._1,elem._2.length)
+      unscheduledTaskCount.getOrElseUpdate(elem._1, elem._2.length)
     }
     for (elem <- pendingTasks.forHost) {
       unscheduledTaskCount.getOrElseUpdate(elem._1, elem._2.length)
@@ -222,7 +224,9 @@ private[spark] class TaskSetManager(
       unscheduledTaskCount.getOrElseUpdate(elem._1, elem._2.length)
     }
   }
+
   logInfo(s"#####初始化unscheduledTaskCount=${unscheduledTaskCount} #####")
+
   private def addPendingTasks(): Unit = {
     val (_, duration) = Utils.timeTakenMs {
       // 按照任务索引倒序放到阻塞任务队列(forExecutor forHost ... )中
@@ -250,8 +254,9 @@ private[spark] class TaskSetManager(
    * sort queue by task.allSize
    */
   DescSortPendingTasks()
+
   private def DescSortPendingTasks(speculatable: Boolean = false): Unit = {
-    logInfo(s"============降序排序前============")
+    logInfo(s"============升序排序前============")
     logInfo(s"前50个pendingTasks.forExecutor=\n${pendingTasks.forExecutor.take(50).mkString("\n")}\n" +
       s"前50个pendingTasks.forHost=\n${pendingTasks.forHost.take(50).mkString("\n")}\n" +
       s"前50个pendingTasks.noPrefs=\n${pendingTasks.noPrefs.take(50)}\n" +
@@ -262,25 +267,25 @@ private[spark] class TaskSetManager(
     pendingTaskSetToAddTo.forExecutor.foreach {
       case (executorName, taskIds) => {
         // 加个负号表示降序
-        pendingTaskSetToAddTo.forExecutor(executorName) = taskIds.sortBy(index => -tasks(index).taskSize)
+        pendingTaskSetToAddTo.forExecutor(executorName) = taskIds.sortBy(index => tasks(index).taskSize)
       }
     }
-    pendingTaskSetToAddTo.forHost.foreach{
-      case (hostName,taskIds) => {
+    pendingTaskSetToAddTo.forHost.foreach {
+      case (hostName, taskIds) => {
         // 加个负号表示降序
-        pendingTaskSetToAddTo.forHost(hostName)=taskIds.sortBy(index => -tasks(index).taskSize)
+        pendingTaskSetToAddTo.forHost(hostName) = taskIds.sortBy(index => tasks(index).taskSize)
       }
     }
     pendingTaskSetToAddTo.forRack.foreach {
       case (rackName, taskIds) => {
         // 加个负号表示降序
-        pendingTaskSetToAddTo.forRack(rackName) = taskIds.sortBy(index => -tasks(index).taskSize)
+        pendingTaskSetToAddTo.forRack(rackName) = taskIds.sortBy(index => tasks(index).taskSize)
       }
     }
-    pendingTaskSetToAddTo.noPrefs = pendingTaskSetToAddTo.noPrefs.sortBy(index => -tasks(index).taskSize)
-    pendingTaskSetToAddTo.all = pendingTaskSetToAddTo.all.sortBy(index => -tasks(index).taskSize)
+    pendingTaskSetToAddTo.noPrefs = pendingTaskSetToAddTo.noPrefs.sortBy(index => tasks(index).taskSize)
+    pendingTaskSetToAddTo.all = pendingTaskSetToAddTo.all.sortBy(index => tasks(index).taskSize)
 
-    logInfo(s"============降序排序后============")
+    logInfo(s"============升序排序后============")
     logInfo(s"前50个pendingTasks.forExecutor=\n${pendingTasks.forExecutor.take(50).mkString("\n")}\n" +
       s"前50个pendingTasks.forHost=\n${pendingTasks.forHost.take(50).mkString("\n")}\n" +
       s"前50个pendingTasks.noPrefs=\n${pendingTasks.noPrefs.take(50)}\n" +
@@ -389,20 +394,33 @@ private[spark] class TaskSetManager(
       indexOffset -= 1
       val index = list(indexOffset)
       // logInfo(s"#####index(partitionId)=${index}#####")
-      // 当前executor可用
+      // 当前executor/host可用
       if (!isTaskExcludededOnExecOrNode(index, execId, host) &&
-        // speculative开启 并且 hasAttemptOnHost会判断任务是否在host上运行过 如果运行了就会从任务队列中删除
+        // 取反 speculative开启 并且 hasAttemptOnHost会判断任务是否在host上运行过 如果运行了就会从任务队列中删除
         !(speculative && hasAttemptOnHost(index, host))) {
         // This should almost always be list.trimEnd(1) to remove tail
         // 将任务取出来
-        // logInfo(s"#####移除任务${index}#####")
+        logInfo(s"=====dequeue调用 dequeueTaskFromList 在真正取出任务的时候 移除任务${index} 最后移除的是返回的任务=====")
         list.remove(indexOffset)
         // Speculatable task should only be launched when at most one copy of the
         // original task is running
         if (!successful(index)) {
           if (copiesRunning(index) == 0) {
+            /**
+             * Custom modifications by jaken
+             * 如果慢节点需要跳过此次调度 就把其从队列中取出来的任务方法回去 防止当进入ANY等级时 再次将未被调度的任务取出来 导致任务一直未被执行
+             */
+            if (skipResourceOffer) {
+              logInfo(s"=====当前慢节点需要跳过此次调度,将任务${index}放回去,之后遍历其数据所在地,统一删除=====")
+              list += index
+            }
             return Some(index)
           } else if (speculative && copiesRunning(index) == 1) {
+            /**
+             * Custom modifications by jaken
+             * 如果慢节点需要跳过此次调度 就把其从队列中取出来的任务方法回去 防止当进入ANY等级时 再次将未被调度的任务取出来 导致任务一直未被执行
+             */
+            if (skipResourceOffer) list += index
             return Some(index)
           }
         }
@@ -444,12 +462,28 @@ private[spark] class TaskSetManager(
       dequeueTaskHelper(execId, host, maxLocality, true))
   }
 
+  /**
+   * Custom modifications by jaken
+   * 将任务的所在位置 根据数据本地性等级 转化成队列中对应
+   */
+  private def parseLocationToString(taskLocation: TaskLocation, taskLocality: TaskLocality): String = {
+    taskLocality match {
+      case PROCESS_LOCAL =>
+        val Array(_, executorId) = taskLocation.toString.stripPrefix("executor_").split("_", 2)
+        executorId
+      case NODE_LOCAL => taskLocation.toString
+    }
+  }
+
   protected def dequeueTaskHelper(
                                    execId: String,
                                    host: String,
                                    maxLocality: TaskLocality.Value,
                                    speculative: Boolean): Option[(Int, TaskLocality.Value, Boolean)] = {
-    if(speculative) {
+    if (speculative && speculatableTasks.isEmpty) {
+      return None
+    }
+    if (speculative) {
       logInfo(s"#####触发推测执行,speculatableTasks=${speculatableTasks},maxLocality=${maxLocality}\n " +
         s"前20个pendingSpeculatableTasks.forExecutor=${pendingSpeculatableTasks.forExecutor.take(20)}\n" +
         s"前20个pendingSpeculatableTasks.forHost=${pendingSpeculatableTasks.forHost.take(20)}\n" +
@@ -457,9 +491,6 @@ private[spark] class TaskSetManager(
         s"前20个pendingSpeculatableTasks.forRack=${pendingSpeculatableTasks.forRack.take(20)}\n" +
         s"前20个pendingSpeculatableTasks.all=${pendingSpeculatableTasks.all.take(20)}\n" +
         "#####)")
-    }
-    if (speculative && speculatableTasks.isEmpty) {
-      return None
     }
     val pendingTaskSetToUse = if (speculative) pendingSpeculatableTasks else pendingTasks
 
@@ -473,10 +504,10 @@ private[spark] class TaskSetManager(
        * 统计任务队列中 未被执行的任务数目,因为spark使用的是懒移除,
        * 也就是只有当对应Key的任务队列被使用时,才会移除已经执行完毕或者正在执行的任务
        */
-/*      if(task.isDefined) {
-        logInfo(s"#####被移除任务taskId=${partitionToIndex(task.get)},partitionId=${tasks(partitionToIndex(task.get))}," +
-          s"preferredLocations=${tasks(partitionToIndex(task.get)).preferredLocations}#####")
-      }*/
+      /*      if(task.isDefined) {
+              logInfo(s"#####被移除任务taskId=${partitionToIndex(task.get)},partitionId=${tasks(partitionToIndex(task.get))}," +
+                s"preferredLocations=${tasks(partitionToIndex(task.get)).preferredLocations}#####")
+            }*/
       if (speculative && task.isDefined) {
         speculatableTasks -= task.get
       }
@@ -494,9 +525,9 @@ private[spark] class TaskSetManager(
         index =>
           // 增加更新unscheduledTaskCount的内容
           for (elem <- tasks(partitionToIndex(index)).preferredLocations) {
-            // TaskLocation eg:executor_jk01_7
-            val Array(host, executorId) = elem.toString.stripPrefix("executor_").split("_", 2)
-            unscheduledTaskCount(executorId) -=1
+            // TaskLocation e.g. executor_jk01_7
+            // val Array(_, executorId) = elem.toString.stripPrefix("executor_").split("_", 2)
+            unscheduledTaskCount(parseLocationToString(elem, PROCESS_LOCAL)) -= 1
           }
 
           return Some((index, TaskLocality.PROCESS_LOCAL, speculative))
@@ -508,7 +539,7 @@ private[spark] class TaskSetManager(
 
         // 增加更新unscheduledTaskCount的内容
         for (elem <- tasks(partitionToIndex(index)).preferredLocations) {
-          unscheduledTaskCount(elem.toString) -= 1
+          unscheduledTaskCount(parseLocationToString(elem, NODE_LOCAL)) -= 1
         }
 
         return Some((index, TaskLocality.NODE_LOCAL, speculative))
@@ -552,10 +583,19 @@ private[spark] class TaskSetManager(
   /**
    * Custom modifications by jaken
    * hostScheduledTaskCount: 主机上被调度的任务数
-   * scheduledTaskIds: 被调度的任务id集合
+   * executorScheduledTaskCount: executor上被调度的任务数
+   * executorToSuccessfulTaskDuration: executor-运行成功的Task的执行时间
+   * scheduledTaskIds: 被调度的任务,用来避免重复将任务放入上述集合中
+   * successfulTaskIds： 已经完成的任务,用来避免重复将任务放入上述集合中
    */
   private val hostScheduledTaskCount: mutable.HashMap[String, Int] = mutable.HashMap.empty
-  private val scheduledTaskIds: mutable.Set[Long] = mutable.Set.empty
+  private val executorScheduledTaskCount: mutable.HashMap[String, Int] = mutable.HashMap.empty
+  private val executorToSuccessfulTaskDuration: mutable.HashMap[String, mutable.ArrayBuffer[Long]] = mutable.HashMap.empty
+  private val scheduledTaskIds: Array[Boolean] = Array.fill(tasks.length)(false)
+  private val successfulTaskIds: Array[Boolean] = Array.fill(tasks.length)(false)
+  // 获取executor的核心数
+  private val executorCores: Int = conf.get(EXECUTOR_CORES)
+  private var skipResourceOffer = false
 
   /**
    * Respond to an offer of a single executor from the scheduler by finding a task
@@ -577,6 +617,7 @@ private[spark] class TaskSetManager(
                      maxLocality: TaskLocality.TaskLocality,
                      taskResourceAssignments: Map[String, ResourceInformation] = Map.empty)
   : (Option[TaskDescription], Boolean) = {
+    skipResourceOffer = false
     // 判断当前的executor和host是不是对当前任务集来说不可用
     val offerExcluded = taskSetExcludelistHelperOpt.exists { excludeList =>
       excludeList.isNodeExcludedForTaskSet(host) ||
@@ -592,51 +633,120 @@ private[spark] class TaskSetManager(
       if (maxLocality != TaskLocality.NO_PREF) {
         // 获得任务真正的数据本地性等级，延迟调度的入口======================
         // 因为当任务的资源在一定时间内无法满足时，会触发数据本地性降级
-        // 内部将已经完成/正在运行的任务 出队列了
+        // 懒更新 内部将已经完成/正在运行的任务 出队列了
         logInfo(s"=====当前任务集中的最大数据本地性等级不是NO_PREF=====")
         allowedLocality = getAllowedLocalityLevel(curTime)
+
         logInfo(s"#####各个队列中的未调度的任务数#####")
         logInfo(s"#####unscheduledTaskCount=\n${unscheduledTaskCount.mkString("\n")}#####")
+
         // 过滤taskSet中已经完成或者正在运行的任务，如果有，对应host的value++
-        for ((tid, taskInfo) <- taskInfos if runningTasksSet.contains(tid)) {
+        for ((tid, taskInfo) <- taskInfos) {
           val host = taskInfo.host
-          logInfo(s"#####running tid=${tid},partitionId=${taskSet.tasks(taskInfo.index).partitionId},host=${host}#####")
-          // 如果host没有出现过
-          if (!hostScheduledTaskCount.keys.exists(_ == host)) hostScheduledTaskCount.put(host, 0)
-          if (!scheduledTaskIds.contains(tid)) {
-            hostScheduledTaskCount(host) += 1
-            scheduledTaskIds.add(tid)
+          val executorId = taskInfo.executorId
+          // 每个任务都会进入正在运行的状态，所以会遍历到所有任务的信息
+          if (runningTasksSet.contains(tid)) {
+            // logInfo(s"#####running tid=${tid},partitionId=${tasks(taskInfo.index).partitionId},host=${host},executorId=${executorId}#####")
+            // 如果host/executor没有出现过
+            if (!hostScheduledTaskCount.keys.exists(_ == host)) hostScheduledTaskCount.put(host, 0)
+            if (!executorScheduledTaskCount.keys.exists(_ == executorId)) executorScheduledTaskCount.put(executorId, 0)
+            // 避免重新计算
+            if (!scheduledTaskIds(taskInfo.index)) {
+              hostScheduledTaskCount(host) += 1
+              executorScheduledTaskCount(executorId) += 1
+              scheduledTaskIds(taskInfo.index) = true
+            }
+          }
+          // 如果当前任务已经完成了
+          if (successful(taskInfo.index)) {
+            // 当前executor第一次出现，将其加入到map中
+            if (!executorToSuccessfulTaskDuration.keys.exists(_ == executorId)) executorToSuccessfulTaskDuration.put(executorId, mutable.ArrayBuffer.empty)
+            if (!successfulTaskIds(taskInfo.index)) {
+              executorToSuccessfulTaskDuration(executorId) += taskInfo.duration
+              successfulTaskIds(taskInfo.index) = true
+            }
           }
         }
         logInfo(s"#####各个主机上调度的任务数#####")
         logInfo(s"#####hostScheduledTaskCount=\n${hostScheduledTaskCount.mkString("\n")}#####")
+        logInfo(s"#####各个executor上调度的任务数#####")
+        logInfo(s"#####executorScheduledTaskCount=\n${executorScheduledTaskCount.mkString("\n")}#####")
+        logInfo(s"#####各个executor已经运行完毕的任务执行时间#####")
+        logInfo(s"#####executorToSuccessfulTaskDuration=\n${executorToSuccessfulTaskDuration.mkString("\n")}#####")
 
-        // 去除副本的相对真实的未被调度的任务数量
+
         val copyCount = tasks(0).preferredLocations.length
-        val estimateUnscheduledTaskCount: HashMap[String, Double] = mutable.HashMap.empty
-        for ((inQueueId, count) <- unscheduledTaskCount) {
-          estimateUnscheduledTaskCount.put(inQueueId, count.toDouble / copyCount)
+        val hostEstimateUnscheduledTaskCount: HashMap[String, Double] = mutable.HashMap.empty
+        val realUnscheduledTaskCount = unscheduledTaskCount.values.sum / copyCount
+        val realHostScheduledTaskCount = hostScheduledTaskCount.values.sum
+        logInfo(s"#####副本数目copyCount=${copyCount}," +
+          s"真实未被调度的任务总数realUnscheduledTaskCount=${realUnscheduledTaskCount}," +
+          s"真实主机上被调度的任务总数realHostScheduledTaskCount=${realHostScheduledTaskCount}#####")
+        for ((host, count) <- hostScheduledTaskCount) {
+          val estimateCount = realUnscheduledTaskCount * count / realHostScheduledTaskCount
+          // 去除副本的相对真实的未被调度的任务数量
+          hostEstimateUnscheduledTaskCount.put(host, estimateCount)
         }
-        logInfo(s"#####estimateUnscheduledTaskCount=${estimateUnscheduledTaskCount}#####")
+        logInfo(s"#####hostEstimateUnscheduledTaskCount=${hostEstimateUnscheduledTaskCount}#####")
 
-        val threshold = 1.5
+        // 当两个executor之间的最近($executorCores)个任务的平均执行时间相差1.3倍的以上时，就认为这两个executor不是同构的
+        val performanceThreshold = 1.3
+        val taskCountDiff = 1.5
         // 以当前将会执行任务的host作为baseline
-        val baseCount = if(hostScheduledTaskCount.contains(host)) hostScheduledTaskCount(host) else 0
+        // val baseCount = if (hostScheduledTaskCount.contains(host)) hostScheduledTaskCount(host) else 0
         // val hostWeight :mutable.HashMap[String,Double] = mutable.HashMap.empty
-        if(baseCount!=0) {
-          for ((hostId,count) <- hostScheduledTaskCount
-               // 只寻找比当前host还快的节点
-               if (count>baseCount
-                 // 性能比较下,快节点运行的任务数 < 队列中的任务数 说明快节点会等待
-                 && ((count.toDouble/baseCount) - estimateUnscheduledTaskCount(hostId) >=threshold ))) {
-            logInfo(s"#####当前executor:${execId},host=${host},快节点(${hostId})将会等待 权重:${count.toDouble/baseCount} - 队列中的任务:${estimateUnscheduledTaskCount(hostId)}  >= ${threshold}#####")
-             //直接返回 表示不在当前executor上面运行任务
-             return (None, false)
-             // hostWeight.put(hostId,count.toDouble/baseCount)
+        // 当executor
+        // 需要考虑两个情景
+        // 1.如果执行一个慢任务，快节点中的任务数不够，造成等待，则不允许
+        // 2.如果执行一个慢任务，快节
+        // 只考虑executor每一轮的第一个任务是否满足判断条件，如果第一个任务满足 后面该轮的任务不做判断
+
+        // 以当前执行任务的executor作为baseline,取最近的 $executorCores 个完成的任务作为计算目标，求平均作业完成时间
+        val baseTimes = if (executorToSuccessfulTaskDuration.contains(execId)) executorToSuccessfulTaskDuration(execId).takeRight(executorCores) else Seq.empty
+        val baseLength = baseTimes.length
+        val baseSum = baseTimes.sum
+        val baseAvgCompleteTime = if (baseLength > 0) baseSum / baseLength else 0
+        // 只判断每一轮的第一个任务
+        if (executorScheduledTaskCount.contains(execId) && executorScheduledTaskCount(execId) % executorCores == 0 && baseAvgCompleteTime != 0) {
+          logInfo(s"#####进入条件判断,当前executor=${execId},host=${host}," +
+            s"第${executorScheduledTaskCount(execId) / executorCores}轮,平均任务完成时间=${baseAvgCompleteTime}ms#####")
+          // TODO: 大小核设计 会造成同一主机上的executor有性能差异
+          // 遍历每一个executor 如果遍历的executor和base executor处在同一个host上面 就没有必要比较
+          var endFor = false
+          for ((exec, count) <- executorScheduledTaskCount
+               if executorToSuccessfulTaskDuration.contains(exec) && host != sched.executorIdToHost(exec) && !endFor) {
+            /*            // 只寻找比当前host还快的节点
+                        if (count > baseCount
+                          // 为了避免出现任务在(A,B)上有数据 但是启动了(A,B,C)这三个节点 就会造成C出现key不存在的错误
+                          && hostEstimateUnscheduledTaskCount.contains(hostId)
+                          // (count.toDouble/baseCount)为节点之间性能的权重 需要乘快节点中的executor数目(sched.hostToExecutors(hostId).size)
+                          // 性能比较下,快节点运行的任务数 < 队列中的任务数 说明快节点会等待
+                          && ((count.toDouble / baseCount) * sched.hostToExecutors(hostId).size - hostEstimateUnscheduledTaskCount(hostId) >= threshold))*/
+            val curTimes = executorToSuccessfulTaskDuration(exec).takeRight(executorCores)
+            val curlength = curTimes.length
+            val curSum = curTimes.sum
+            val curAvgCompleteTime = if (curlength > 0) curSum / curlength else 0
+            if (curAvgCompleteTime != 0) {
+              // baseAvgCompleteTime越大 表示快节点的执行时间越短 性能差距越大
+              val performanceDiff = baseAvgCompleteTime / curAvgCompleteTime.toDouble
+              val execCount = sched.hostToExecutors(sched.executorIdToHost(exec)).size
+              // 只寻找比当前executor快的executor
+              if (performanceDiff > performanceThreshold) {
+                // 性能差异 * 当前executor所在节点的executor数目 - 快节点的任务数 >=
+                if (performanceDiff * execCount -
+                  hostEstimateUnscheduledTaskCount(sched.executorIdToHost(exec)) >= taskCountDiff) {
+                  logInfo(s"#####当前executor:${execId},host=${host},比较的exec=${exec},快节点(${sched.executorIdToHost(exec)})将会等待 " +
+                    s"权重(${performanceDiff})*execCount(${execCount}) - 快节点中的任务:${hostEstimateUnscheduledTaskCount(sched.executorIdToHost(exec))}  >= ${taskCountDiff}#####")
+                  // 直接返回 表示不在当前executor上面运行任务,
+                  // TODO: 需要将任务从当前本地行等级的队列中移除
+                  skipResourceOffer = true
+                  endFor = true
+                  // return (None, false)
+                }
+              }
+            }
           }
         }
-        // logInfo(s"#####hostWeight=${hostWeight}#####")
-
 
 
         /*logInfo(s"#####下面统计各队列中的任务数#####")
@@ -687,12 +797,51 @@ private[spark] class TaskSetManager(
         logInfo(s"#####[延迟调度出口]准备从任务本地性等级为${allowedLocality}的队列中取1个任务#####")
         dequeueTask(execId, host, allowedLocality)
           .map {
+            // 如果skipResourceOffer=false这个时候 任务已经从队列中取出来了
             case (index, taskLocality, speculative) =>
               // Found a task; do some bookkeeping and return a task description
               // 拿到真正的任务
+              // 这里拿到的index 其实是任务队列里对应的partitionId
               val task = tasks(index)
+
+              /**
+               * Custom modifications by jaken
+               * 将任务进行迁移 目前先只考虑NODE_LOCAL的情况
+               */
+              if (skipResourceOffer) {
+                var queueMap: HashMap[String, ArrayBuffer[Int]] = HashMap.empty
+                allowedLocality match {
+                  case PROCESS_LOCAL =>
+                    queueMap = pendingTasks.forExecutor
+                  case NODE_LOCAL =>
+                    queueMap = pendingTasks.forHost
+                  // 如果是其他情况 不需要去除副本 直接返回
+                  case _ => return (None, false)
+                }
+                // logInfo(s"#####task.preferredLocations=${task.preferredLocations} #####")
+                // 根据任务的偏好位置 到对应的队列中删除将要调度的任务
+                for (inQueueKey <- task.preferredLocations) {
+                  // 将任务位置 TaskLocation 转换成 它在queue中的key
+                  val inQueueKeyStr = parseLocationToString(inQueueKey, allowedLocality)
+                  var indexOffset = queueMap(inQueueKeyStr).size
+                  var endWhile = false
+                  // logInfo(s"#####inQueueKeyStr=${inQueueKeyStr},indexOffset=${indexOffset} #####")
+                  // 从后往前 寻找任务 将其从队列中删除
+                  while (indexOffset > 0 && !endWhile) {
+                    indexOffset -= 1
+                    val curIndex = queueMap(inQueueKeyStr)(indexOffset)
+                    if (curIndex == index) {
+                      logInfo(s"=====将partitionId=${curIndex}的任务从inQueueKeyStr=${inQueueKeyStr}中移除,indexOffset=${indexOffset}=====")
+                      queueMap(inQueueKeyStr).remove(indexOffset)
+                      endWhile = true
+                    }
+                  }
+                }
+                // 将任务删除完毕之后 直接返回
+                return (None, false)
+              }
               val taskId = sched.newTaskId()
-              logInfo(s"#####真正取出任务本地性等级为${taskLocality},taskId=${taskId},execId=${execId},host=${host},task=${tasks(index)}#####")
+              logInfo(s"#####真正取出任务本地性等级为${taskLocality},taskId=${taskId},partitionId=${index},execId=${execId},host=${host},task=${tasks(index)}#####")
               logInfo(s"==============<取出任务后>taskSet=${this}=================")
               // Do various bookkeeping
               copiesRunning(index) += 1
@@ -798,7 +947,7 @@ private[spark] class TaskSetManager(
   private def getAllowedLocalityLevel(curTime: Long): TaskLocality.TaskLocality = {
     // Remove the scheduled or finished tasks lazily
     // 会删除forXXX map中已经被调度的任务 只要有没有完成的任务就会返回true
-    // forXXX map中的任务都运行完毕了就返回false
+    // forXXX map中的任务都运行完毕了就返回false，懒删除已经调度的 或已经完成的任务
     def tasksNeedToBeScheduledFrom(pendingTaskIds: ArrayBuffer[Int]): Boolean = {
       var indexOffset = pendingTaskIds.size
       // 从后往前判断任务是否执行完毕
@@ -810,7 +959,7 @@ private[spark] class TaskSetManager(
           return true
         } else {
           // 否则就表示运行完了，将其从队列中删除
-          logInfo(s"#####将任务(partitionId=${index})从任务队列中移除#####")
+          logInfo(s"=====tasksNeedToBeScheduledFrom 任务(partitionId=${index})跑过了,将其从任务队列中移除=====")
           pendingTaskIds.remove(indexOffset)
         }
       }
@@ -821,12 +970,14 @@ private[spark] class TaskSetManager(
     // Walk through the list of tasks that can be scheduled at each location and returns true
     // if there are any tasks that still need to be scheduled. Lazily cleans up tasks that have
     // already been scheduled.
-    // pendingTasks中有任务可以被调度,就返回true,懒删除已经被调度的任务
+    // pendingTasks中有任务可以被调度,就返回true,删除队列中值为空的 key
     def moreTasksToRunIn(pendingTasks: HashMap[String, ArrayBuffer[Int]]): Boolean = {
       val emptyKeys = new ArrayBuffer[String]
+      // 在这里 遍历每个等级对应的map<string,arraybuffer>
       val hasTasks = pendingTasks.exists {
         // id是executor/host/rack的id tasks为可以放置的任务
         case (id: String, tasks: ArrayBuffer[Int]) =>
+          // 会删除一些任务
           if (tasksNeedToBeScheduledFrom(tasks)) {
             true
           } else {
@@ -1044,7 +1195,7 @@ private[spark] class TaskSetManager(
   def handleSuccessfulTask(tid: Long, result: DirectTaskResult[_]): Unit = {
     val info = taskInfos(tid)
     val index = info.index
-    // 如果任务已经成功执行了 或者被其他用户终止了
+    // 如果任务已经成功执行了并且被其他用户终止了
     // Check if any other attempt succeeded before this and this attempt has not been handled
     if (successful(index) && killedByOtherAttempt.contains(tid)) {
       // Undo the effect on calculatedTasks and totalResultSize made earlier when
@@ -1090,17 +1241,18 @@ private[spark] class TaskSetManager(
       // 这里已经有任务执行完毕的时间了，info.duration会计算任务开始运行的时间和任务的完成时间 二者相减就得到了任务的执行时间
       logInfo(s"#####任务的完成时间: Finished ${taskName(info.taskId)} in ${info.duration} ms " +
         s"on ${info.host} (executor ${info.executorId}) ($tasksSuccessful/$numTasks)#####")
+
       /**
        * Custom modifications by jaken
        * 打印运行完成的任务信息 和 正在运行的任务信息 用来计算异构节点之间的性能差异
        */
-/*      logInfo(s"#####运行成功的taskInfo#####")
-      for ((tid, info) <- taskInfos if successful(info.index)) {
-        logInfo(s"#####tid=${tid},partitionId=${tasks(info.index).partitionId},taskInfo=${info}#####")
-      }
-      logInfo(s"#####正在运行的tasksSet,count=${runningTasks}#####")
-      logInfo(s"#####runningTasksSet=${runningTasksSet}#####")
-      logInfo(s"#####<单个任务运行完毕>taskSet=${this}#####")*/
+      /*      logInfo(s"#####运行成功的taskInfo#####")
+            for ((tid, info) <- taskInfos if successful(info.index)) {
+              logInfo(s"#####tid=${tid},partitionId=${tasks(info.index).partitionId},taskInfo=${info}#####")
+            }
+            logInfo(s"#####正在运行的tasksSet,count=${runningTasks}#####")
+            logInfo(s"#####runningTasksSet=${runningTasksSet}#####")
+            logInfo(s"#####<单个任务运行完毕>taskSet=${this}#####")*/
 
       // 当所有任务都完成了 就设置为僵尸模式
       if (tasksSuccessful == numTasks) {
