@@ -211,6 +211,7 @@ private[spark] class Executor(
     executorMetricsSource)
 
   // Executor for the heartbeat task.
+  // 默认心跳10s一次
   private val heartbeater = new Heartbeater(
     () => Executor.this.reportHeartBeat(),
     "executor-heartbeater",
@@ -442,9 +443,11 @@ private[spark] class Executor(
 
     // 既然是线程 肯定要看线程的run方法
     override def run(): Unit = {
+      // 设置用于在日志中进行跟踪的上下文信息机制
       setMDCForTask(taskName, mdcProperties)
       threadId = Thread.currentThread.getId
       Thread.currentThread.setName(threadName)
+      // threadMXBean能够获得JVM中所有线程的信息，包括监控线程的各种状态
       val threadMXBean = ManagementFactory.getThreadMXBean
       val taskMemoryManager = new TaskMemoryManager(env.memoryManager, taskId)
       val deserializeStartTimeNs = System.nanoTime()
@@ -508,6 +511,7 @@ private[spark] class Executor(
           threadMXBean.getCurrentThreadCpuTime
         } else 0L
         var threwException = true
+        // value是任务运行完毕所得到的结果 后面需要序列化 作为其他任务的输入
         val value = Utils.tryWithSafeFinally {
           // 真正运行任务，进
           val res = task.run(
@@ -519,6 +523,9 @@ private[spark] class Executor(
           threwException = false
           res
         } {
+          // metrics入口
+          // 在run方法之后 就表示任务已经跑完了，接下来应当去更新相应的metrics数据
+          // 释放任务的锁  和相应的内存
           val releasedLocks = env.blockManager.releaseAllLocksForTask(taskId)
           val freedMemory = taskMemoryManager.cleanUpAllAllocatedMemory()
 
@@ -542,6 +549,7 @@ private[spark] class Executor(
             }
           }
         }
+        // 处理任务失败的情况
         task.context.fetchFailed.foreach { fetchFailure =>
           // uh-oh.  it appears the user code has caught the fetch-failure without throwing any
           // other exceptions.  Its *possible* this is what the user meant to do (though highly
@@ -550,6 +558,7 @@ private[spark] class Executor(
             s"unrecoverable fetch failures!  Most likely this means user code is incorrectly " +
             s"swallowing Spark's internal ${classOf[FetchFailedException]}", fetchFailure)
         }
+
         val taskFinishNs = System.nanoTime()
         val taskFinishCpu = if (threadMXBean.isCurrentThreadCpuTimeSupported) {
           threadMXBean.getCurrentThreadCpuTime
@@ -558,11 +567,15 @@ private[spark] class Executor(
         // If the task has been killed, let's fail it.
         task.context.killTaskIfInterrupted()
 
+        // 定义序列化器
         val resultSer = env.serializer.newInstance()
         val beforeSerializationNs = System.nanoTime()
+        // 将任务执行完毕的结果序列化 以作为其他任务的输入
         val valueBytes = resultSer.serialize(value)
         val afterSerializationNs = System.nanoTime()
 
+        // 运行任务 首先要获取任务的数据(通过网络传输的序列化的数据) 所以首先要进行反序列化
+        // 更新任务的metrics信息 包括：反序列化时间 反序列化的CPU时间 executor运行的时间 executor运行的CPU时间
         // Deserialization happens in two parts: first, we deserialize a Task object, which
         // includes the Partition. Second, Task.run() deserializes the RDD and function to be run.
         task.metrics.setExecutorDeserializeTime(TimeUnit.NANOSECONDS.toMillis(
@@ -570,14 +583,19 @@ private[spark] class Executor(
         task.metrics.setExecutorDeserializeCpuTime(
           (taskStartCpu - deserializeStartCpuTime) + task.executorDeserializeCpuTime)
         // We need to subtract Task.run()'s deserialization time to avoid double-counting
+        // executor运行的时间
         task.metrics.setExecutorRunTime(TimeUnit.NANOSECONDS.toMillis(
           (taskFinishNs - taskStartTimeNs) - task.executorDeserializeTimeNs))
+        // executor运行的CPU时间,仅仅是 CPU 在执行任务时花费的时间,没有考虑可能等待或者阻塞的时间
+        // TODO : 可以通过上面两个时间相减 可以得到任务阻塞的时间
         task.metrics.setExecutorCpuTime(
           (taskFinishCpu - taskStartCpu) - task.executorDeserializeCpuTime)
         task.metrics.setJvmGCTime(computeTotalGcTime() - startGCTime)
         task.metrics.setResultSerializationTime(TimeUnit.NANOSECONDS.toMillis(
           afterSerializationNs - beforeSerializationNs))
 
+
+        // 更新executor的相关指标
         // Expose task metrics using the Dropwizard metrics system.
         // Update task metrics counters
         executorSource.METRIC_CPU_TIME.inc(task.metrics.executorCpuTime)
@@ -620,10 +638,14 @@ private[spark] class Executor(
         executorSource.METRIC_MEMORY_BYTES_SPILLED.inc(task.metrics.memoryBytesSpilled)
 
         // Note: accumulator updates must be collected after TaskMetrics is updated
+        // 在计算完上面的任务的度量指标之后,获得要更新的指标的累加器数组
         val accumUpdates = task.collectAccumulatorUpdates()
+        // metricsPoller 表示executor指标的收集器 这里的作用是将任务的峰值指标收集起来
         val metricPeaks = metricsPoller.getTaskMetricPeaks(taskId)
-        // TODO: do not serialize value twice
+        // TODO: do not serialize value twice 因为任务的结果数据已经序列化一次了 所以这里有优化的空间
+        // 这里将任务执行的序列化的结果、要更新的累加器、任务的峰值指标 封装在直接结果中
         val directResult = new DirectTaskResult(valueBytes, accumUpdates, metricPeaks)
+        // 将这些数据都序列化
         val serializedDirectResult = ser.serialize(directResult)
         val resultSize = serializedDirectResult.limit()
 
@@ -653,7 +675,8 @@ private[spark] class Executor(
         setTaskFinishedAndClearInterruptStatus()
         plugins.foreach(_.onTaskSucceeded())
         // 消息13 向executor发送statusUpdate消息,state=FINISHED
-        logInfo(s"=====消息13 向executor发送statusUpdate消息,state=FINISHED,参数为序列化的任务执行结果======")
+        logInfo(s"=====消息13 向executor发送statusUpdate消息,state=FINISHED,参数为序列化的任务执行结果," +
+          s"其中也包含了任务指标的更新数据======")
         execBackend.statusUpdate(taskId, TaskState.FINISHED, serializedResult)
       } catch {
         case t: TaskKilledException =>
@@ -1000,7 +1023,7 @@ private[spark] class Executor(
     if (pollOnHeartbeat) {
       metricsPoller.poll()
     }
-
+    // 从metricsPoller中收集executor的metrics信息
     val executorUpdates = metricsPoller.getExecutorUpdates()
 
     for (taskRunner <- runningTasks.values().asScala) {
@@ -1020,6 +1043,7 @@ private[spark] class Executor(
     val message = Heartbeat(executorId, accumUpdates.toArray, env.blockManager.blockManagerId,
       executorUpdates)
     try {
+      // 发送心跳包
       val response = heartbeatReceiverRef.askSync[HeartbeatResponse](
         message, new RpcTimeout(HEARTBEAT_INTERVAL_MS.millis, EXECUTOR_HEARTBEAT_INTERVAL.key))
       if (!executorShutdown.get && response.reregisterBlockManager) {

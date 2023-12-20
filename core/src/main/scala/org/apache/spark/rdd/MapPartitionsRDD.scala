@@ -17,8 +17,9 @@
 
 package org.apache.spark.rdd
 
-import scala.reflect.ClassTag
+import org.apache.spark.internal.Logging
 
+import scala.reflect.ClassTag
 import org.apache.spark.{Partition, TaskContext}
 
 /**
@@ -42,14 +43,16 @@ private[spark] class MapPartitionsRDD[U: ClassTag, T: ClassTag](
     preservesPartitioning: Boolean = false,
     isFromBarrier: Boolean = false,
     isOrderSensitive: Boolean = false)
-  extends RDD[U](prev) {
+  extends RDD[U](prev) with Logging{
 
   override val partitioner = if (preservesPartitioning) firstParent[T].partitioner else None
 
   override def getPartitions: Array[Partition] = firstParent[T].partitions
 
-  override def compute(split: Partition, context: TaskContext): Iterator[U] =
+  override def compute(split: Partition, context: TaskContext): Iterator[U] = {
+    logInfo(s"=====进入mapPartitionsRDD.compute()=====")
     f(context, split.index, firstParent[T].iterator(split, context))
+  }
 
   override def clearDependencies(): Unit = {
     super.clearDependencies()

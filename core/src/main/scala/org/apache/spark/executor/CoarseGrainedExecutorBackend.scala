@@ -267,7 +267,7 @@ private[spark] class CoarseGrainedExecutorBackend(
       taskResources.remove(taskId)
     }
     driver match {
-      // 消息14,executor向Driver发送任务状态更新的消息,当任务执行完毕 就是任务完成的消息
+      // 消息13.1,executor向Driver发送任务状态更新的消息,当任务执行完毕 就是任务完成的消息
       case Some(driverRef) => driverRef.send(msg)
       case None => logWarning(s"Drop $msg because has not yet connected to driver")
     }

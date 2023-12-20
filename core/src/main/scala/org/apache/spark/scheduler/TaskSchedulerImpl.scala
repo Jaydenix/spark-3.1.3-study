@@ -21,15 +21,13 @@ import java.nio.ByteBuffer
 import java.util.{Timer, TimerTask}
 import java.util.concurrent.{ConcurrentHashMap, TimeUnit}
 import java.util.concurrent.atomic.AtomicLong
-
 import scala.collection.mutable
 import scala.collection.mutable.{ArrayBuffer, Buffer, HashMap, HashSet}
 import scala.util.Random
-
 import org.apache.spark._
 import org.apache.spark.TaskState.TaskState
 import org.apache.spark.executor.ExecutorMetrics
-import org.apache.spark.internal.{config, Logging}
+import org.apache.spark.internal.{Logging, config}
 import org.apache.spark.internal.config._
 import org.apache.spark.resource.{ResourceInformation, ResourceProfile}
 import org.apache.spark.rpc.RpcEndpoint
@@ -150,11 +148,13 @@ private[spark] class TaskSchedulerImpl(
   // The set of executors we have on each host; this is used to compute hostsAlive, which
   // in turn is used to decide when we can attain data locality on a given host
   // 主机上的executor的映射
-  protected val hostToExecutors = new HashMap[String, HashSet[String]]
+  // 需要在taskset中使用 来计算节点之间的性能差异 取出其修饰 protected
+  val hostToExecutors = new HashMap[String, HashSet[String]]
 
   protected val hostsByRack = new HashMap[String, HashSet[String]]
 
-  protected val executorIdToHost = new HashMap[String, String]
+  // 需要在taskset中使用 来计算节点之间的性能差异 取出其修饰 protected
+  val executorIdToHost = new HashMap[String, String]
 
   private val abortTimer = new Timer(true)
   // Exposed for testing
@@ -190,6 +190,15 @@ private[spark] class TaskSchedulerImpl(
   private[scheduler] var barrierCoordinator: RpcEndpoint = null
 
   protected val defaultRackValue: Option[String] = None
+
+  /**
+   * Custom modifications by jaken
+   * 根据host来统计对应的已经完成的任务/正在进行的任务，在每次任务调度前会更新一次
+   */
+/*
+  private val hostCompleteTaskCount: mutable.Map[String, Int] = mutable.Map.empty
+  private val recordTaskId: mutable.Set[Long] = mutable.Set.empty
+*/
 
   private def maybeInitBarrierCoordinator(): Unit = {
     if (barrierCoordinator == null) {
@@ -397,6 +406,46 @@ private[spark] class TaskSchedulerImpl(
                                           tasks: IndexedSeq[ArrayBuffer[TaskDescription]],
                                           addressesWithDescs: ArrayBuffer[(String, TaskDescription)])
   : (Boolean, Option[TaskLocality]) = {
+    /*    logInfo(s"#####运行成功的taskInfo#####")
+        for ((tid, info) <- taskSet.taskInfos if taskSet.successful(info.index)) {
+          logInfo(s"#####tid=${tid},partitionId=${taskSet.tasks(info.index).partitionId},taskInfo=${info}#####")
+        }*/
+    /**
+     * Custom modifications by jaken
+     * 打印运行完成的任务信息 和 正在运行的任务信息 用来计算异构节点之间的性能差异
+     */
+    /*    logInfo(s"#####运行成功的taskInfo#####")
+        for ((tid, successfulTaskInfo) <- taskSet.taskInfos if taskSet.successful(successfulTaskInfo.index)) {
+          logInfo(s"#####successful tid=${tid},partitionId=${taskSet.tasks(successfulTaskInfo.index).partitionId},taskInfo=${successfulTaskInfo}#####")
+        }
+        logInfo(s"#####正在运行的taskInfo#####")
+        for ((tid, runningTasInfo) <- taskSet.taskInfos if taskSet.runningTasksSet.contains(tid)) {
+          logInfo(s"#####running tid=${tid},partitionId=${taskSet.tasks(runningTasInfo.index).partitionId},taskInfo=${runningTasInfo}#####")
+        }*/
+    // 筛选出正在运行或运行成功的任务的taskInfo,下面的方法在任务完成的时候可能会出错 因为任务从runnings集合出来了 但没有被加入到finish集合中
+    /*    val hostCompleteTaskCount: mutable.Map[String, Int] = mutable.Map.empty
+    for ((tid, taskInfo) <- taskSet.taskInfos if taskSet.successful(taskInfo.index) || taskSet.runningTasksSet.contains(tid)) {
+      val host = taskInfo.host
+      if(taskSet.successful(taskInfo.index)) logInfo(s"#####successful tid=${tid},partitionId=${taskSet.tasks(taskInfo.index).partitionId},host=${host}#####")
+      else logInfo(s"#####running tid=${tid},partitionId=${taskSet.tasks(taskInfo.index).partitionId},host=${host}#####")
+      if(!hostCompleteTaskCount.keys.exists(_ == host)) hostCompleteTaskCount.put(host,0)
+      hostCompleteTaskCount(host) +=1
+    }
+    logInfo(s"#####hostCompleteTaskCount=${hostCompleteTaskCount}#####")*/
+
+/*    // 过滤taskSet中已经完成或者正在运行的任务，如果有，对应host的value++
+    for ((tid, taskInfo) <- taskSet.taskInfos if taskSet.runningTasksSet.contains(tid)) {
+      val host = taskInfo.host
+      logInfo(s"#####running tid=${tid},partitionId=${taskSet.tasks(taskInfo.index).partitionId},host=${host}#####")
+      // 如果host没有出现过
+      if(!hostCompleteTaskCount.keys.exists(_ == host)) hostCompleteTaskCount.put(host,0)
+      if(!recordTaskId.contains(tid)) {
+        hostCompleteTaskCount(host) +=1
+        recordTaskId.add(tid)
+      }
+    }
+    logInfo(s"#####hostCompleteTaskCount=${hostCompleteTaskCount}#####")*/
+
     var noDelayScheduleRejects = true
     var minLaunchedLocality: Option[TaskLocality] = None
     // nodes and executors that are excluded for the entire application have already been
@@ -414,13 +463,17 @@ private[spark] class TaskSchedulerImpl(
         // 判断executor，能不能跑至少一个任务
         // 返回的是 Option[Map[资源名称:String, ResourceInformation]]
         // ResourceInformation为map[资源名称:String,资源对应的地址:Array[String]]
-        // 返回的值是 满足了CPU要求之后，除了CPU以外的其他资源的分配方案，一般为None
+        // 返回的值是 满足了CPU要求之后，除了CPU以外的其他资源的分配方案
+
+        // 如果CPU不满足要求,就返回None,自然不会将任务放置到当前executor中
         val taskResAssignmentsOpt = resourcesMeetTaskRequirements(taskSet, availableCpus(i), availableResources(i))
         // 得到了资源名和对应的地址之后，挨个处理各种资源
         //logInfo(s"=====得到了taskResAssignmentsOpt:map[资源名称:String,map[资源名称:String,资源对应的地址:Array[String]]]:$taskResAssignmentsOpt=====")
         //logInfo(s"=====当前executor:$execId $host=====")
         //logInfo(s">>>>>五.<开始>遍历除CPU外的每种资源 >>>>>")
-        logInfo(s"#####executor:${execId}满足CPU要求后的其他资源分配方案taskResAssignmentsOpt=${taskResAssignmentsOpt}#####")
+        if(taskResAssignmentsOpt.isDefined) logInfo(s"#####executor:${execId}满足CPU要求后的其他资源分配方案taskResAssignmentsOpt=${taskResAssignmentsOpt}#####")
+        else logInfo(s"#####当前execId=${execId},host=${host},CPU资源不满足运行一个任务的最低要求,跳过#####")
+        // 如果executor不满足CPU资源 taskResAssignmentsOpt没有定义 就不会进入下面的方法
         taskResAssignmentsOpt.foreach { taskResAssignments =>
           try {
             val prof = sc.resourceProfileManager.resourceProfileFromId(taskSetRpID)
@@ -603,19 +656,6 @@ private[spark] class TaskSchedulerImpl(
     // tasks的列数 = executor的核心数 / 每个task消耗的核心数
     // tasks也就是将要放置在executor上的任务，是一个二维数组 每行表示executor[i]上分配的任务
     val tasks = shuffledOffers.map(o => new ArrayBuffer[TaskDescription](o.cores / CPUS_PER_TASK))
-    /*    if (offers.nonEmpty) {
-          logInfo(s"=====初始化tasks(任务调度的结果矩阵): IndexedSeq[ArrayBuffer[TaskDescription]]=====")
-          logInfo(s"=====tasks也就是将要放置在executor上的任务，是一个二维数组 每行表示executor[i]上分配的任务=====")
-          logInfo(s"=====tasks的列数 = executor的核心数 / 每个task消耗的核心数=${tasks.take(0).length}=====")
-          logInfo(s"=====tasks的行数 = 可用executor的数目 = ${tasks.length}======")
-          logInfo(s"=====相关参数availableResources availableCpus resourceProfileIds长度均为executor的数目=====")
-          logInfo(s"-----开始打印tasks-----")
-          for (tasksOnExecutor <- tasks) {
-            logInfo(s"=====taskOnExecutor=${tasksOnExecutor}=====")
-          }
-          logInfo(s"-----tasks打印结束-----")
-        }*/
-
     // 后面的参数同tasks一样，长度都为executor的数目
     val availableResources = shuffledOffers.map(_.resources).toArray
     val availableCpus = shuffledOffers.map(o => o.cores).toArray
@@ -680,6 +720,7 @@ private[spark] class TaskSchedulerImpl(
         -1
       }
       // Skip the barrier taskSet if the available slots are less than the number of pending tasks.
+      // 如果屏障调度的任务集没有足够的资源 那么就跳过当前任务级
       if (taskSet.isBarrier && numBarrierSlotsAvailable < taskSet.numTasks) {
         // Skip the launch process.
         // TODO SPARK-24819 If the job requires more slots than available (both busy and free
@@ -714,24 +755,30 @@ private[spark] class TaskSchedulerImpl(
             // minLocality没有定义，就说明resourceOfferSingleTaskSet()中没有task被放置
             launchedTaskAtCurrentMaxLocality = minLocality.isDefined
             launchedAnyTask |= launchedTaskAtCurrentMaxLocality
+            /*这里是很重要的 也就是说 只要noDelaySchedulingRejects曾经为false 它就一直为false了
+            * 对应的情况就是 如果有 没有运行新任务 & 数据本地性等级=ANY & 队列中存在任务,说明此次任务调度被拒了,没有使用任何资源
+            * e.g. 某个节点中没有任务了 那次调度肯定没有使用任何资源 那么noDelaySchedulingRejects从那之后一直为false
+            * */
             noDelaySchedulingRejects &= noDelayScheduleReject
             globalMinLocality = minTaskLocality(globalMinLocality, minLocality)
           } while (launchedTaskAtCurrentMaxLocality)
-
         }
+        // legacyLocalityWaitReset默认是false 也就是使用新版的重置机制：不是在每个任务调度结束就重置时间
         if (!legacyLocalityWaitReset) {
           // 延迟调度没有拒绝资源，也就是任务正常调度了
           if (noDelaySchedulingRejects) {
             if (launchedAnyTask &&
-              // noRejectsSinceLastReset表示该taskSet是否没有得到想要的资源
+              // noRejectsSinceLastReset表示该taskSet 现在本轮处于调度拒绝的状态 只有当执行了一次isAllFreeResources=true的调度(该调度就是延迟调度的应用)之后 才会恢复ture
               (isAllFreeResources || noRejectsSinceLastReset.getOrElse(taskSet.taskSet, true))) {
               // 需要重置延迟调度的时间
               taskSet.resetDelayScheduleTimer(globalMinLocality)
+              logInfo(s"=====重置延迟调度时间,noDelaySchedulingRejects=true,=====")
               noRejectsSinceLastReset.update(taskSet.taskSet, true)
             }
           }
-          // 延迟调度因资源紧缺等问题 拒绝了资源 更新相关参数
+          // 有资源运行任务 数据队列不为空 但是却没有任务调度
           else {
+            logInfo(s"=====noDelaySchedulingRejects=false,没有使用任何资源,不重置延迟调度的时间=====")
             noRejectsSinceLastReset.update(taskSet.taskSet, false)
           }
         }
@@ -943,10 +990,21 @@ private[spark] class TaskSchedulerImpl(
                 failedExecutor = Some(execId)
               }
             }
+            // 如果任务为完成状态
             if (TaskState.isFinished(state)) {
               cleanupTaskState(tid)
               taskSet.removeRunningTask(tid)
+              // 任务是完成状态 就将成功的任务从队列中移除
               if (state == TaskState.FINISHED) {
+                /**
+                 * Custom modifications by jaken
+                 * 更新任务的完成时间 该时间不包括拉取任务结果数据的时间
+                 */
+                val time = clock.getTimeMillis()
+                val info = taskSet.taskInfos(tid)
+                info.finishTimeWithoutFetch = time
+                info.durationWithoutFetch = time - info.launchTime
+                logInfo(s"=====更新已完成任务tid=${tid},finishTimeWithoutFetch=${time},durationWithoutFetch=${info.durationWithoutFetch}=====")
                 taskResultGetter.enqueueSuccessfulTask(taskSet, tid, serializedData)
               } else if (Set(TaskState.FAILED, TaskState.KILLED, TaskState.LOST).contains(state)) {
                 taskResultGetter.enqueueFailedTask(taskSet, tid, state, serializedData)
@@ -1214,7 +1272,7 @@ private[spark] class TaskSchedulerImpl(
 
   def hasExecutorsAliveOnHost(host: String): Boolean = synchronized {
     logInfo(s"#####hostToExecutors=${hostToExecutors}#####")
-    val res =hostToExecutors.get(host)
+    val res = hostToExecutors.get(host)
       .exists(executors => executors.exists(e => !isExecutorDecommissioned(e)))
     logInfo(s"=====进入hasExecutorsAliveOnHost()方法,host=${host},hostToExecutors.get(host)=${hostToExecutors.get(host)},executors.exists(e => !isExecutorDecommissioned(e))=${res}=====")
     res

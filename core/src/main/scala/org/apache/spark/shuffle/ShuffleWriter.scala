@@ -28,7 +28,7 @@ private[spark] abstract class ShuffleWriter[K, V] {
   /** Write a sequence of records to this task's output */
   /**
    * 分为BypassMergeSortShuffleWriter 跳过排序的SortShuffleManager
-   * UnsafeShuffleWritre ???
+   * UnsafeShuffleWriter ???
    * SortShuffleWriter 排序的SortShuffleManager
    * */
   @throws[IOException]

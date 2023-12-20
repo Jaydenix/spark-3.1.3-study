@@ -298,6 +298,7 @@ private[spark] class DAGScheduler(
    * and results are being fetched remotely.
    */
   def taskGettingResult(taskInfo: TaskInfo): Unit = {
+    // 向DAG加入GettingResultEvent的事件 表示任务已经完成了 正在获取任务的数据
     eventProcessLoop.post(GettingResultEvent(taskInfo))
   }
 
@@ -311,6 +312,8 @@ private[spark] class DAGScheduler(
                  accumUpdates: Seq[AccumulatorV2[_, _]],
                  metricPeaks: Array[Long],
                  taskInfo: TaskInfo): Unit = {
+    // logInfo(s"#####task_partitionId=${task.partitionId},taskInfo.duration=${taskInfo.duration} #####")
+    // 向事件队列中 加入任务完成的事件 内部会更新任务的监控信息(Accumulator) 并最终发送到spark的事件总线上 被spark web UI所使用
     eventProcessLoop.post(
       CompletionEvent(task, reason, result, accumUpdates, metricPeaks, taskInfo))
   }
@@ -789,7 +792,7 @@ private[spark] class DAGScheduler(
     def visit(rdd: RDD[_]): Unit = {
       if (!visited(rdd)) {
         visited += rdd
-        // 获取该RDD还没有缓存的分区
+        // 当前RDD有 没被缓存的分区
         // val rddHasUncachedPartitions = getCacheLocs(rdd).contains(Nil)
         val rddHasUncachedPartitions = getCacheLocsAndSizes(rdd).contains((Nil, Nil))
         // 分区不为空
@@ -1970,10 +1973,12 @@ private[spark] class DAGScheduler(
    * This still doesn't stop the caller from updating the accumulator outside the scheduler,
    * but that's not our problem since there's nothing we can do about that.
    */
+  // 真正更新任务的metrics数据
   private def updateAccumulators(event: CompletionEvent): Unit = {
     val task = event.task
     val stage = stageIdToStage(task.stageId)
-
+    logInfo(s"=====真正更新任务的metrics信息,当前task=${task}=====")
+    // 遍历每个累加器
     event.accumUpdates.foreach { updates =>
       val id = updates.id
       try {
@@ -1983,12 +1988,19 @@ private[spark] class DAGScheduler(
           case None =>
             throw new SparkException(s"attempted to access non-existent accumulator $id")
         }
+        // 合并任务的相关信息，也就是将累加器中的值相加汇总
         acc.merge(updates.asInstanceOf[AccumulatorV2[Any, Any]])
         // To avoid UI cruft, ignore cases where value wasn't updated
         if (acc.name.isDefined && !updates.isZero) {
+          /*logInfo(s"#####更新前stage.latestInfo.taskMetrics#####")
+          logInfo(s"#####stage.latestInfo=${stage.latestInfo.taskMetrics}#####")*/
+          // 可以看到stage有一个latestInfo:StageInfo属性记录了任务的metrics信息
           stage.latestInfo.accumulables(id) = acc.toInfo(None, Some(acc.value))
+          // 更新taskInfo对应的accumulables
           event.taskInfo.setAccumulables(
             acc.toInfo(Some(updates.value), Some(acc.value)) +: event.taskInfo.accumulables)
+/*          logInfo(s"#####更新后stage.latestInfo.taskMetrics#####")
+          logInfo(s"#####stage.latestInfo=${stage.latestInfo.taskMetrics}#####")*/
         }
       } catch {
         case NonFatal(e) =>
@@ -2004,6 +2016,7 @@ private[spark] class DAGScheduler(
     }
   }
 
+  // 作用是将任务完成的事件发布到总线上 其中包含的参数有任务的基本信息 监控信息 executor的监控信息
   private def postTaskEnd(event: CompletionEvent): Unit = {
     val taskMetrics: TaskMetrics =
       if (event.accumUpdates.nonEmpty) {
@@ -2018,7 +2031,7 @@ private[spark] class DAGScheduler(
       } else {
         null
       }
-
+    // 向监听总线中发布任务完成的事件
     listenerBus.post(SparkListenerTaskEnd(event.task.stageId, event.task.stageAttemptId,
       Utils.getFormattedClassName(event.task), event.reason, event.taskInfo,
       new ExecutorMetrics(event.metricPeaks), taskMetrics))
@@ -2049,6 +2062,7 @@ private[spark] class DAGScheduler(
    * Responds to a task finishing. This is called inside the event loop so it assumes that it can
    * modify the scheduler's internal state. Use taskEnded() to post a task end event from outside.
    */
+  // 处理任务完成的时间
   private[scheduler] def handleTaskCompletion(event: CompletionEvent): Unit = {
     val task = event.task
     val stageId = task.stageId
@@ -2059,7 +2073,7 @@ private[spark] class DAGScheduler(
       task.partitionId,
       event.taskInfo.attemptNumber, // this is a task attempt number
       event.reason)
-
+    // 处理异常情况
     if (!stageIdToStage.contains(task.stageId)) {
       // The stage may have already finished when we get this event -- e.g. maybe it was a
       // speculative task. It is important that we send the TaskEnd event in any case, so listeners
@@ -2077,6 +2091,7 @@ private[spark] class DAGScheduler(
     // Make sure the task's accumulators are updated before any other processing happens, so that
     // we can post a task end event before any jobs or stages are updated. The accumulators are
     // only updated in certain cases.
+    // 如果任务运行成功了 就么就更新相关的metrics信息
     event.reason match {
       case Success =>
         task match {
@@ -2086,6 +2101,7 @@ private[spark] class DAGScheduler(
               case Some(job) =>
                 // Only update the accumulator once for each result task.
                 if (!job.finished(rt.outputId)) {
+                  // event: CompletionEvent，事件中包含任务的监控信息，内部包含merge操作
                   updateAccumulators(event)
                 }
               case None => // Ignore update if task's job has finished.
@@ -2096,6 +2112,7 @@ private[spark] class DAGScheduler(
       case _: ExceptionFailure | _: TaskKilled => updateAccumulators(event)
       case _ =>
     }
+    // 事件中的任务监控信息被更新之后 就向事件总线发布任务完成事件
     postTaskEnd(event)
 
     event.reason match {
@@ -2159,6 +2176,7 @@ private[spark] class DAGScheduler(
           case smt: ShuffleMapTask =>
             val shuffleStage = stage.asInstanceOf[ShuffleMapStage]
             shuffleStage.pendingPartitions -= task.partitionId
+            // 如果当前任务是ShuffleMapTask,就将任务执行的结果放入status中
             val status = event.result.asInstanceOf[MapStatus]
             val execId = status.location.executorId
             logDebug("ShuffleMapTask finished on " + execId)

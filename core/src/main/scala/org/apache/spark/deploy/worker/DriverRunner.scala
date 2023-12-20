@@ -99,7 +99,7 @@ private[deploy] class DriverRunner(
           // 真正运行driver
           // prepare driver jars and run driver
           val exitCode = prepareAndRunDriver()
-          logInfo("=====Driver运行完毕,已退出=====")
+          logInfo("=====Driver启动指令已运行=====")
           // set final state depending on if forcibly killed and process exit code
           finalState = if (exitCode == 0) {
             Some(DriverState.FINISHED)

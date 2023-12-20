@@ -266,7 +266,7 @@ private[spark] abstract class Task[T](
   }
 
   override def toString: String = s"Task(appId=$appId,jobId=$jobId,stageId=$stageId," +
-    s"partitionId=$partitionId,preferredLocations=${preferredLocations},preferredLocsAndSizes=${preferredLocsAndSizes}" +
+    s"partitionId=$partitionId,taskSize=${taskSize},preferredLocations=${preferredLocations},preferredLocsAndSizes=${preferredLocsAndSizes}" +
     s"stageAttemptId=$stageAttemptId," +
     s"localProperties=$localProperties,taskMemoryManager$taskMemoryManager, context=$context, taskThread=$taskThread," +
     s" )"
