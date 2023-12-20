@@ -153,6 +153,7 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
         logInfo(s"=====driver处理消息13 StatusUpdate:executorId=${executorId},taskId=${taskId}," +
           s"state=${state}======")
         // 进入这个方法 跟踪data中的任务数据 以及 metrics数据流向
+        // 同时内部会调用新线程拉去任务的执行结果数据 拉取成功之后才会统计任务的执行时间
         scheduler.statusUpdate(taskId, state, data.value)
 
         // 如果收到的是任务状态完成的消息

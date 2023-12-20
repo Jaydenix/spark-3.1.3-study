@@ -650,7 +650,8 @@ private[spark] class MapOutputTrackerMaster(
       : Seq[String] = {
     if (shuffleLocalityEnabled && dep.rdd.partitions.length < SHUFFLE_PREF_MAP_THRESHOLD &&
         dep.partitioner.numPartitions < SHUFFLE_PREF_REDUCE_THRESHOLD) {
-      // 得到blockManager的id
+      // 得到blockManager的id,REDUCER_PREF_LOCS_FRACTION默认值为0.2,当根据任务数据所在位置来计算偏好位置时
+      // 如果任务的某一部分数据/任务所需的总数据<0.2 则不把任务的这部分数据考虑到偏好位置中去
       val blockManagerIds = getLocationsWithLargestOutputs(dep.shuffleId, partitionId,
         dep.partitioner.numPartitions, REDUCER_PREF_LOCS_FRACTION)
       if (blockManagerIds.nonEmpty) {
@@ -783,7 +784,7 @@ private[spark] class MapOutputTrackerMaster(
             }
             mapIdx = mapIdx + 1
           }
-          logInfo(s"#####DownStreamTaskPartitionId=${reducerId},DownStreamInputSize=${totalOutputSize}#####")
+          logInfo(s"#####DownStreamTaskPartitionId=${reducerId},DownStreamInputSize=${totalOutputSize},locs=${locs.mkString(",")}#####")
           // 如果存在某些任务块中的数据 / reduce任务需要的总数据 < 阈值(默认0.2),表示当前块中的数据量太小,不将其考虑到影响数据本地性的因素中
           val topLocs = locs.filter { case (loc, size) =>
             size.toDouble / totalOutputSize >= fractionThreshold

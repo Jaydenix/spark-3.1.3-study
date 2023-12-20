@@ -792,7 +792,7 @@ private[spark] class DAGScheduler(
     def visit(rdd: RDD[_]): Unit = {
       if (!visited(rdd)) {
         visited += rdd
-        // 获取该RDD还没有缓存的分区
+        // 当前RDD有 没被缓存的分区
         // val rddHasUncachedPartitions = getCacheLocs(rdd).contains(Nil)
         val rddHasUncachedPartitions = getCacheLocsAndSizes(rdd).contains((Nil, Nil))
         // 分区不为空
@@ -2176,6 +2176,7 @@ private[spark] class DAGScheduler(
           case smt: ShuffleMapTask =>
             val shuffleStage = stage.asInstanceOf[ShuffleMapStage]
             shuffleStage.pendingPartitions -= task.partitionId
+            // 如果当前任务是ShuffleMapTask,就将任务执行的结果放入status中
             val status = event.result.asInstanceOf[MapStatus]
             val execId = status.location.executorId
             logDebug("ShuffleMapTask finished on " + execId)

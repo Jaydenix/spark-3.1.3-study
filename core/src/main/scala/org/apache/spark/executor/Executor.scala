@@ -443,6 +443,7 @@ private[spark] class Executor(
 
     // 既然是线程 肯定要看线程的run方法
     override def run(): Unit = {
+      // 设置用于在日志中进行跟踪的上下文信息机制
       setMDCForTask(taskName, mdcProperties)
       threadId = Thread.currentThread.getId
       Thread.currentThread.setName(threadName)

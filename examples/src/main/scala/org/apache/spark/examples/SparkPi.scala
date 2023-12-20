@@ -19,7 +19,6 @@
 package org.apache.spark.examples
 
 import scala.math.random
-
 import org.apache.spark.sql.SparkSession
 
 /** Computes an approximation to pi */
@@ -29,7 +28,6 @@ object SparkPi {
     val spark = SparkSession
       .builder()
       .appName("Spark Pi")
-      .master("local[*]")
       .getOrCreate()
     val slices = if (args.length > 0) args(0).toInt else 5
     val n = math.min(100000L * slices, Int.MaxValue).toInt // avoid overflow

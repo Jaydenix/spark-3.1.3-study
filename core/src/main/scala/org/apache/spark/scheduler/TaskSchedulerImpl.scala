@@ -473,6 +473,7 @@ private[spark] class TaskSchedulerImpl(
         //logInfo(s">>>>>五.<开始>遍历除CPU外的每种资源 >>>>>")
         if(taskResAssignmentsOpt.isDefined) logInfo(s"#####executor:${execId}满足CPU要求后的其他资源分配方案taskResAssignmentsOpt=${taskResAssignmentsOpt}#####")
         else logInfo(s"#####当前execId=${execId},host=${host},CPU资源不满足运行一个任务的最低要求,跳过#####")
+        // 如果executor不满足CPU资源 taskResAssignmentsOpt没有定义 就不会进入下面的方法
         taskResAssignmentsOpt.foreach { taskResAssignments =>
           try {
             val prof = sc.resourceProfileManager.resourceProfileFromId(taskSetRpID)
@@ -719,6 +720,7 @@ private[spark] class TaskSchedulerImpl(
         -1
       }
       // Skip the barrier taskSet if the available slots are less than the number of pending tasks.
+      // 如果屏障调度的任务集没有足够的资源 那么就跳过当前任务级
       if (taskSet.isBarrier && numBarrierSlotsAvailable < taskSet.numTasks) {
         // Skip the launch process.
         // TODO SPARK-24819 If the job requires more slots than available (both busy and free
@@ -753,24 +755,30 @@ private[spark] class TaskSchedulerImpl(
             // minLocality没有定义，就说明resourceOfferSingleTaskSet()中没有task被放置
             launchedTaskAtCurrentMaxLocality = minLocality.isDefined
             launchedAnyTask |= launchedTaskAtCurrentMaxLocality
+            /*这里是很重要的 也就是说 只要noDelaySchedulingRejects曾经为false 它就一直为false了
+            * 对应的情况就是 如果有 没有运行新任务 & 数据本地性等级=ANY & 队列中存在任务,说明此次任务调度被拒了,没有使用任何资源
+            * e.g. 某个节点中没有任务了 那次调度肯定没有使用任何资源 那么noDelaySchedulingRejects从那之后一直为false
+            * */
             noDelaySchedulingRejects &= noDelayScheduleReject
             globalMinLocality = minTaskLocality(globalMinLocality, minLocality)
           } while (launchedTaskAtCurrentMaxLocality)
-
         }
+        // legacyLocalityWaitReset默认是false 也就是使用新版的重置机制：不是在每个任务调度结束就重置时间
         if (!legacyLocalityWaitReset) {
           // 延迟调度没有拒绝资源，也就是任务正常调度了
           if (noDelaySchedulingRejects) {
             if (launchedAnyTask &&
-              // noRejectsSinceLastReset表示该taskSet是否没有得到想要的资源
+              // noRejectsSinceLastReset表示该taskSet 现在本轮处于调度拒绝的状态 只有当执行了一次isAllFreeResources=true的调度(该调度就是延迟调度的应用)之后 才会恢复ture
               (isAllFreeResources || noRejectsSinceLastReset.getOrElse(taskSet.taskSet, true))) {
               // 需要重置延迟调度的时间
               taskSet.resetDelayScheduleTimer(globalMinLocality)
+              logInfo(s"=====重置延迟调度时间,noDelaySchedulingRejects=true,=====")
               noRejectsSinceLastReset.update(taskSet.taskSet, true)
             }
           }
-          // 延迟调度因资源紧缺等问题 拒绝了资源 更新相关参数
+          // 有资源运行任务 数据队列不为空 但是却没有任务调度
           else {
+            logInfo(s"=====noDelaySchedulingRejects=false,没有使用任何资源,不重置延迟调度的时间=====")
             noRejectsSinceLastReset.update(taskSet.taskSet, false)
           }
         }
@@ -988,6 +996,15 @@ private[spark] class TaskSchedulerImpl(
               taskSet.removeRunningTask(tid)
               // 任务是完成状态 就将成功的任务从队列中移除
               if (state == TaskState.FINISHED) {
+                /**
+                 * Custom modifications by jaken
+                 * 更新任务的完成时间 该时间不包括拉取任务结果数据的时间
+                 */
+                val time = clock.getTimeMillis()
+                val info = taskSet.taskInfos(tid)
+                info.finishTimeWithoutFetch = time
+                info.durationWithoutFetch = time - info.launchTime
+                logInfo(s"=====更新已完成任务tid=${tid},finishTimeWithoutFetch=${time},durationWithoutFetch=${info.durationWithoutFetch}=====")
                 taskResultGetter.enqueueSuccessfulTask(taskSet, tid, serializedData)
               } else if (Set(TaskState.FAILED, TaskState.KILLED, TaskState.LOST).contains(state)) {
                 taskResultGetter.enqueueFailedTask(taskSet, tid, state, serializedData)

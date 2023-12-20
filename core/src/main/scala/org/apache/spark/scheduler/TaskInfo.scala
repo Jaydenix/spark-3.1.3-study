@@ -66,6 +66,19 @@ class TaskInfo(
    */
   var finishTime: Long = 0
 
+  /**
+   * Custom modifications by jaken
+   * 任务执行完毕的时间 与上面不同 并不包括抓取结果的时间 在driver收到executor任务完成消息 之后
+   * 对单个executor进行任务调度之前 就已经计算好
+   */
+  var finishTimeWithoutFetch: Long = 0
+
+  /**
+   * Custom modifications by jaken
+   * 不包括拉取任务执行结果的时间
+   */
+  var durationWithoutFetch: Long = 0
+
   var failed = false
 
   var killed = false
