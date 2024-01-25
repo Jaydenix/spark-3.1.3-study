@@ -488,7 +488,7 @@ private[spark] class TaskSetManager(
    * host：慢主机
    * */
   private def migrateTaskToFastNode(fastHostList: Seq[String], currTime: Long, queueMap: HashMap[String, ArrayBuffer[Int]],
-                                    index: Int, task: Task[_], host: String): Boolean = {
+                                    index: Int, task: Task[_], host: String): Boolean =  {
     for (fastHost <- fastHostList) {
       // 快节点也不堵塞
       if (currTime > hostBlockTime(fastHost)) {
@@ -565,6 +565,8 @@ private[spark] class TaskSetManager(
               // TaskLocation e.g. executor_jk01_7
               // val Array(_, executorId) = elem.toString.stripPrefix("executor_").split("_", 2)
               unscheduledTaskCount(parseLocationToString(elem, PROCESS_LOCAL)) -= 1
+              // process_local 也删一个
+              unscheduledTaskCount(elem.host) -= 1
               /*            // 如果数据本地性等级是PROCESS_LOCAL 除了要删除PROCESS_LOCAL队列的任务之外 host中的也要删掉 暂不考虑rack
                           unscheduledTaskCount(parseLocationToString(elem, NODE_LOCAL)) -= 1*/
             }
@@ -579,7 +581,7 @@ private[spark] class TaskSetManager(
         // 如果skipResourceOffer==ture 表明本次任务不会调度 不更新unscheduledTaskCount的内容
         if (!skipResourceOffer) {
           for (elem <- tasks(partitionToIndex(index)).preferredLocations) {
-            unscheduledTaskCount(parseLocationToString(elem, NODE_LOCAL)) -= 1
+            unscheduledTaskCount(elem.host) -= 1
           }
         }
         return Some((index, TaskLocality.NODE_LOCAL, speculative))
@@ -655,6 +657,7 @@ private[spark] class TaskSetManager(
   // 从配置文件中获取参数
   // 开始的判断的任务运行轮数
   private val ROUND: Int = conf.get("spark.round").toInt
+  private val COMPENSATE_TIME = conf.getOption("spark.compensateTime").getOrElse("0").toInt
   // 数据都在慢节点上时 将慢节点任务传送给快节点的数目
   private val MAX_TRANS_TIMES = conf.get("spark.maxTransTimes").toInt
   // logInfo(s"ROUND = ${ROUND}")
@@ -714,6 +717,10 @@ private[spark] class TaskSetManager(
         logInfo(s"#####各个队列中的未调度的任务数#####")
         logInfo(s"#####unscheduledTaskCount=\n${unscheduledTaskCount.mkString("\n")}#####")
 
+        for (host <- sched.hostToExecutors.keys) {
+          // 初始化一下主机阻塞的时间
+          if (!hostBlockTime.contains(host)) hostBlockTime.put(host, 0)
+        }
         // 过滤taskSet中已经完成或者正在运行的任务，如果有，对应host的value++
         for ((tid, taskInfo) <- taskInfos) {
           val host = taskInfo.host
@@ -724,8 +731,6 @@ private[spark] class TaskSetManager(
             // 如果host/executor没有出现过
             if (!hostScheduledTaskCount.keys.exists(_ == host)) {
               hostScheduledTaskCount.put(host, 0)
-              // 顺带初始化一下主机阻塞的时间
-              hostBlockTime.put(host, 0)
             }
             if (!executorScheduledTaskCount.keys.exists(_ == executorId)) executorScheduledTaskCount.put(executorId, 0)
             // 避免重新计算
@@ -914,8 +919,15 @@ private[spark] class TaskSetManager(
         logInfo(s"#####hostPerformanceDiffer=${hostPerformanceDiffer.mkString(",")} #####")
         val currTime = clock.getTimeMillis()
 
-        var slowHostList: Seq[(String, Double)] = mutable.Seq.empty
-        slowHostList = hostPerformanceDiffer.filter { case (_, value) => value < slowPerformanceThreshold && value != 0 }.toSeq
+        var slowHostList: Seq[(String, Double)] = Seq.empty
+        // 这是对于当前exec来说 如果当前host是最慢的 那么就会导致slowHostList为空 因为当前host权值设置为1 达不到条件
+        // 这里只是对于当前host来说 去找相对于当前host的慢节点
+        // slowHostList = hostPerformanceDiffer.filter { case (_, value) => value < slowPerformanceThreshold}.toSeq
+        slowHostList = hostPerformanceDiffer.filter { case (_, value) => value < slowPerformanceThreshold}.toSeq
+        // 如果当前host对应的慢节点为空 并且 当前节点有快节点 那就将当前节点放入慢节点集合中
+        if (slowHostList.isEmpty && hostPerformanceDiffer.exists { case (_, value) => value > fastPerformanceThreshold }) {
+          slowHostList = Seq((host, 1.0))
+        }
         logInfo(s"#####慢节点map：${slowHostList.mkString(",")}#####")
         val freeSlowHostList = slowHostList.filter {
           case (slowHost, _) => {
@@ -927,8 +939,13 @@ private[spark] class TaskSetManager(
         }
         logInfo(s"#####空闲的慢节点map：${freeSlowHostList.mkString(",")}#####")
         var chosenSlowHost = ""
-        var chosenSlowExecutors: Seq[String] = Seq.empty
-        if (freeSlowHostList.nonEmpty) chosenSlowHost = freeSlowHostList.minBy(_._2)._1
+        // executorToDurationWithoutFetch.nonEmpty表示只要跑完了一个任务
+        if (freeSlowHostList.nonEmpty && executorToDurationWithoutFetch.nonEmpty) {
+          // 在空闲的慢节点中 随机选一个慢节点
+          val randomIndex = Random.nextInt(freeSlowHostList.size)
+          // chosenSlowHost = freeSlowHostList(randomIndex)._1
+          chosenSlowHost = Random.shuffle(freeSlowHostList).apply(randomIndex)._1
+        }
         logInfo(s"#####选中的慢节点是${chosenSlowHost} #####")
 
         /*var shuffledSlowHostList: Seq[(String, Double)] = mutable.Seq.empty
@@ -973,10 +990,13 @@ private[spark] class TaskSetManager(
                 val shuffledFastHostList = Random.shuffle(fastHostList)*/
         var shuffledFastHostListToSlow: Seq[String] = mutable.Seq.empty
         if (chosenSlowHost.nonEmpty) {
-          val performanceToSlow = hostPerformanceDiffer(chosenSlowHost)
+          var performanceToSlow = hostPerformanceDiffer(chosenSlowHost)
+          // 先给定一个固定小的值0.1吧
+          if (performanceToSlow == 0) performanceToSlow = 0.1
           val hostPerformanceDifferToSlow = hostPerformanceDiffer.map {
             case (host, performance) => (host, (performance / performanceToSlow).formatted("%.2f").toDouble)
           }
+          // 这里并不能像选择慢节点一样 先筛选空闲的快节点 因为后面的数据本地性要考查所有的快节点 只要数据在快节点上 无论其是否空闲 都不会移动该任务
           val fastHostListToSlow = hostPerformanceDifferToSlow.filter(_._2 > fastPerformanceThreshold).keys.toSeq
           logInfo(s"#####chosenSlowHost=${chosenSlowHost},hostPerformanceDifferToSlow=${hostPerformanceDifferToSlow}#####")
           logInfo(s"#####fastHostListToSlow=${fastHostListToSlow}#####")
@@ -997,93 +1017,158 @@ private[spark] class TaskSetManager(
           case NODE_LOCAL =>
             queueMap = pendingTasks.forHost
             logInfo(s"#####当前选择的慢节点chosenSlowHost=${chosenSlowHost},对应打乱的快节点集合[${shuffledFastHostListToSlow.mkString(",")}]")
+            /*logInfo(s"#####当前节点host=${host},对应打乱的快节点集合[${shuffledFastHostList.mkString(",")}]" +
+              s"运行任务Pid=${index},偏好位置=${task.preferredLocations.map(_.host)}#####")*/
+            // 任务的副本数 大于 慢节点的个数+它本身(1) 表明总会有任务在快节点上 用于转移任务
+            val alwaysInFast = (tasks.head.preferredLocations.size > (hostPerformanceDiffer.size - shuffledFastHostListToSlow.size))
+            var tarnsTimes = 0
+            if (queueMap.nonEmpty && queueMap.contains(chosenSlowHost)) {
+              // 如果本次调度没有跳过 && 当前节点对应存在快节点 && 当前节点网络空闲baseHostFree
+              if (!skipResourceOffer && shuffledFastHostListToSlow.nonEmpty) {
+                logInfo(s"=====被选择的慢节点空闲,调度正常进行,快节点不为空,可以预迁移任务=====")
+                // 从当前节点的队列中 从前往后找(相当于优先找最晚执行的任务) 如果任务的数据全在慢节点上 就将其迁移到快节点上 找到要迁移的任务
+                val queueMapSize = queueMap(chosenSlowHost).size
+                // TODO 也许不用每次都从0开始 记录一下每个节点开始转移的下标
+                var indexOffset = 0
+                var endWhile = false
+                // 首先要找到要迁移的任务
+                /*
+                * 因为走到这一步的时候 已经默认没有跳过本次任务调度 && 已经将任务从末尾取出来了
+                * */
+                while (indexOffset < queueMapSize && !endWhile) {
+                  // curIndex是任务的partitionId
+                  val curIndex = queueMap(chosenSlowHost)(indexOffset)
+                  logInfo(s"#####curIndex=${curIndex},movedTaskIds(curIndex)=${movedTaskIds(curIndex)}#####")
+                  // 我们并没有在慢节点上删除任务 因为移动到快节点的任务会很快被执行 所以为了避免慢节点重复将该任务迁移到快节点 需要判断要迁移的任务是否已经被迁移过
+                  // !scheduledTaskIds(curIndex) 已经被执行
+                  if (!movedTaskIds(curIndex)) {
+                    // 拿到任务的数据所在地
+                    val dataLocations = tasks(curIndex).preferredLocations.map(parseLocationToString(_, allowedLocality))
+                    logInfo(s"=====当前遍历任务partitionId=${curIndex},数据本地性为[${dataLocations.mkString(",")}]=====")
+                    val fastHostL: mutable.ArrayBuffer[String] = mutable.ArrayBuffer.empty
+                    var dataInFast = false
+                    // 遍历每一个快节点 只要有数据在快节点上 那么就没必要继续考虑当前任务了
+                    for (fastHost <- shuffledFastHostListToSlow if !dataInFast) {
+                      // 如果数据没有在当前遍历的快节点上 可以将当前任务迁移到该快节点上
+                      if (!dataLocations.contains(fastHost)) {
+                        // 将节点加入当前能够迁移的快节点集合中
+                        fastHostL += fastHost
+                      } else {
+                        // 否则 有数据在快节点上 表明当前任务不能迁移 因为它可以在快节点上用好的本地性等级计算
+                        dataInFast = true
+                        if (!queueMap.contains(fastHost)) queueMap.put(fastHost, ArrayBuffer.empty)
+                        // 一次调度最多只让迁移MAX_TRANS_TIMES次
+                        if (tarnsTimes < MAX_TRANS_TIMES) {
+                          // 在快节点的末尾加入任务 因为总会有任务在快节点上 所以不会涉及数据传输
+                          /*           // 将其从慢节点中移除 这里没有使用remove 因为其代价有点大 直接让它等于末尾的任务
+                                     val replaceIndex = queueMap(chosenSlowHost)(queueMapSize-1)
+                                     queueMap(chosenSlowHost)(indexOffset) = replaceIndex*/
+                          queueMap(fastHost) += curIndex
+                          tarnsTimes += 1
+                          // 记录当前任务被移动了 防止重复考虑
+                          movedTaskIds(curIndex) = true
+                          // movedTaskIds(replaceIndex) = true
+                          logInfo(s"=====数据在快节点上,直接将任务${curIndex}分给快节点${fastHost}=====")
+                        }
+                        // 如果总是会有任务在快节点上
+                        if (alwaysInFast) {
+                          /*// 在慢节点中将任务移除
+                          queueMap(chosenSlowHost).remove(indexOffset)*/
+                          tarnsTimes += 1
+                          logInfo(s"#####总会有任务在快节点上 迁移${MAX_TRANS_TIMES}次任务 #####")
+                          // 当转移了MAX_TRANS_TIMES次之后 退出循环
+                          if (tarnsTimes >= MAX_TRANS_TIMES) endWhile = true
+                        } else logInfo(s"=====有数据在快节点上,考虑下一任务=====")
+                      }
+                    }
+                    if (!dataInFast) {
+                      if (fastHostL.nonEmpty) logInfo(s"=====数据位置满足迁移的快节点有[${fastHostL.mkString(",")}]=====")
+                      var allFastHostBusy = true
+                      for (fh <- fastHostL) {
+                        // 只要有一个节点空闲 就可以尝试将任务迁移过去
+                        if (!hostBlockTime.contains(fh) || currTime > hostBlockTime(fh)) {
+                          allFastHostBusy = false
+                        }
+                      }
+                      // 快节点都忙的话 要提前退出 不能迁移 (当满足数据位置的节点为空时 不应当提前结束 而应当考虑下一个任务)
+                      if (fastHostL.nonEmpty && allFastHostBusy) {
+                        logInfo(s"=====快节点都忙,跳过本轮任务转移=====")
+                        endWhile = true
+                      }
+                      else {
+                        // logInfo(s"#####当前节点对应的快节点fastHostL:${fastHostL.mkString(",")}#####")
+                        // 如果migrateTaskToFastNode返回true 就表明任务成功迁移到了快节点
+                        endWhile = migrateTaskToFastNode(fastHostL, currTime, queueMap, curIndex, tasks(curIndex), chosenSlowHost)
+                        // 这里也许并不需要将任务从数据所在地的节点移除 因为既然能够迁移成功 我们是把任务放在快节点末尾 快节点大概率可以比慢节点优先执行
+                      }
+                    }
+                  }
+                  indexOffset += 1
+                }
+              }
+            }
+          case PROCESS_LOCAL =>
+            queueMap = pendingTasks.forExecutor
+            var chosenSlowExecutor = ""
+            var freeShuffledFastHostListToSlow: Seq[String] = Seq.empty
+            var shuffledFastExecutorListToSlow: Seq[String] = Seq.empty
+            // 选择慢节点打乱的第一个executor 找到快的executor
+            if (chosenSlowHost.nonEmpty) {
+              chosenSlowExecutor = Random.shuffle(sched.hostToExecutors(chosenSlowHost)).head
+              // 筛选出空闲的快节点 因为PROCESS_LOCAL并不需要判断数据本地性
+              freeShuffledFastHostListToSlow = shuffledFastHostListToSlow.filter {
+                case (fastHost) => {
+                  // 判断慢节点是否空闲
+                  if (hostBlockTime.contains(fastHost)) (currTime > hostBlockTime(fastHost))
+                  // 如果hostBlockTime中slowHost没出现过 说明是最初的情况
+                  else true
+                }
+              }
+              shuffledFastExecutorListToSlow = Random.shuffle(freeShuffledFastHostListToSlow.flatMap(sched.hostToExecutors(_)))
+              logInfo(s"#####chosenSlowExecutor=${chosenSlowExecutor}," +
+                s"freeShuffledFastHostListToSlow=${freeShuffledFastHostListToSlow.mkString(",")}," +
+                s"shuffledFastExecutorListToSlow=${shuffledFastExecutorListToSlow.mkString(",")}#####")
+            }
+
+            if (queueMap.nonEmpty && queueMap.contains(chosenSlowExecutor)) {
+              // 如果本次调度没有跳过 && 当前节点对应存在快节点 && 当前节点网络空闲baseHostFree
+              if (!skipResourceOffer && shuffledFastExecutorListToSlow.nonEmpty) {
+                // logInfo(s"=====被选择的慢节点空闲,调度正常进行,快节点不为空,可以预迁移任务=====")
+                // 从当前节点的队列中 从前往后找(相当于优先找最晚执行的任务) 如果任务的数据全在慢节点上 就将其迁移到快节点上 找到要迁移的任务
+                val queueMapSize = queueMap(chosenSlowExecutor).size
+                // TODO 也许不用每次都从0开始 记录一下每个节点开始转移的下标
+                var indexOffset = 0
+                var endWhile = false
+                // 首先要找到要迁移的任务 然后将任务迁移过去
+                while (indexOffset < queueMapSize && !endWhile) {
+                  // curIndex是任务的partitionId
+                  val curIndex = queueMap(chosenSlowExecutor)(indexOffset)
+                  // 我们并没有在慢节点上删除任务 因为移动到快节点的任务会很快被执行 所以为了避免慢节点重复将该任务迁移到快节点 需要判断要迁移的任务是否已经被迁移过
+                  // !scheduledTaskIds(curIndex) 已经被执行
+                  if (!movedTaskIds(curIndex)) {
+                    // 拿到任务的数据所在地 这里是executor本地性 就返回的是executorId
+                    val dataLocations = tasks(curIndex).preferredLocations.map(parseLocationToString(_, allowedLocality))
+                    logInfo(s"=====当前遍历任务partitionId=${curIndex},数据本地性为[${dataLocations.mkString(",")}]=====")
+                    // 选快executor的第一个 把任务迁移过去
+                    val chosenFastExecutor = shuffledFastExecutorListToSlow.head
+                    if (!queueMap.contains(chosenFastExecutor)) queueMap.put(chosenFastExecutor, ArrayBuffer.empty)
+                    queueMap(chosenFastExecutor) += curIndex
+                    logInfo(s"#####将任务partitionId=${curIndex}从慢executor${chosenSlowExecutor}迁移到快executor${chosenFastExecutor}#####")
+                    endWhile = true
+                    movedTaskIds(curIndex) = true
+                    val blockTime = ((tasks(curIndex).taskSize >> 20) * 1000 / bandwidth) + currTime + COMPENSATE_TIME
+                    logInfo(s"#####当前系统时间${currTime}ms,任务迁移之后的阻塞截止时间: blockTime = ${blockTime}ms#####")
+                    hostBlockTime(chosenSlowHost) = blockTime
+                    hostBlockTime(sched.executorIdToHost(chosenFastExecutor)) = blockTime
+                  }
+                  indexOffset += 1
+                }
+              }
+            }
           // 如果是其他情况 先不管 直接返回
           case _ => queueMap = HashMap.empty
         }
-        /*logInfo(s"#####当前节点host=${host},对应打乱的快节点集合[${shuffledFastHostList.mkString(",")}]" +
-          s"运行任务Pid=${index},偏好位置=${task.preferredLocations.map(_.host)}#####")*/
-        // 任务的副本数 大于 慢节点的个数+它本身(1) 表明总会有任务在快节点上 用于转移任务
-        val alwaysInFast = (tasks.head.preferredLocations.size > (hostPerformanceDiffer.size - shuffledFastHostListToSlow.size))
-        var tarnsTimes = 0
-
-        if (queueMap.nonEmpty && queueMap.contains(chosenSlowHost)) {
-          // 如果本次调度没有跳过 && 当前节点对应存在快节点 && 当前节点网络空闲baseHostFree
-          if (!skipResourceOffer && shuffledFastHostListToSlow.nonEmpty) {
-            logInfo(s"=====被选择的慢节点空闲,调度正常进行,快节点不为空,可以预迁移任务=====")
-            // 从当前节点的队列中 从前往后找(相当于优先找最晚执行的任务) 如果任务的数据全在慢节点上 就将其迁移到快节点上 找到要迁移的任务
-            val queueMapSize = queueMap(chosenSlowHost).size
-            // TODO 也许不用每次都从0开始 记录一下每个节点开始转移的下标
-            var indexOffset = 0
-            var endWhile = false
-            // 首先要找到要迁移的任务
-            /*
-            * 因为走到这一步的时候 已经默认没有跳过本次任务调度 && 已经将任务从末尾取出来了
-            * */
-            while (indexOffset < queueMapSize && !endWhile) {
-              // curIndex是任务的partitionId
-              val curIndex = queueMap(chosenSlowHost)(indexOffset)
-              // 我们并没有在慢节点上删除任务 因为移动到快节点的任务会很快被执行 所以为了避免慢节点重复将该任务迁移到快节点 需要判断要迁移的任务是否已经被迁移过
-              // !scheduledTaskIds(curIndex) 已经被执行
-              if (!movedTaskIds(curIndex)) {
-                // 拿到任务的数据所在地
-                val dataLocations = tasks(curIndex).preferredLocations.map(parseLocationToString(_, allowedLocality))
-                logInfo(s"=====当前遍历任务partitionId=${curIndex},数据本地性为[${dataLocations.mkString(",")}]=====")
-                val fastHostL: mutable.ArrayBuffer[String] = mutable.ArrayBuffer.empty
-                var dataInFast = false
-                // 遍历每一个快节点 只要有数据在快节点上 那么就没必要继续考虑当前任务了
-                for (fastHost <- shuffledFastHostListToSlow if !dataInFast) {
-                  // 如果数据没有在当前遍历的快节点上 可以将当前任务迁移到该快节点上
-                  if (!dataLocations.contains(fastHost)) {
-                    // 将节点加入当前能够迁移的快节点集合中
-                    fastHostL += fastHost
-                  } else {
-                    // 否则 有数据在快节点上 表明当前任务不能迁移 因为它可以在快节点上用好的本地性等级计算
-                    dataInFast = true
-                    if (!queueMap.contains(fastHost)) queueMap.put(fastHost, ArrayBuffer.empty)
-                    // 在快节点的末尾加入任务 因为总会有任务在快节点上 所以不会涉及数据传输
-                    queueMap(fastHost) += curIndex
-                    // 记录当前任务被移动了 防止重复考虑
-                    movedTaskIds(curIndex) = true
-                    // 并不用在慢节点中删除任务 因为移动的任务是靠后运算的
-                    logInfo(s"=====数据在快节点上,直接将任务${curIndex}分给快节点${fastHost}=====")
-                    // 如果总是会有任务在快节点上
-                    if (alwaysInFast) {
-                      /*// 在慢节点中将任务移除
-                      queueMap(chosenSlowHost).remove(indexOffset)*/
-                      tarnsTimes += 1
-                      // 当转移了MAX_TRANS_TIMES次之后 退出循环
-                      if (tarnsTimes >= MAX_TRANS_TIMES) endWhile = true
-                    } else logInfo(s"=====有数据在快节点上,考虑下一任务=====")
-                  }
-                }
-                if (!dataInFast) {
-                  if (fastHostL.nonEmpty) logInfo(s"=====数据位置满足迁移的快节点有[${fastHostL.mkString(",")}]=====")
-                  var allFastHostBusy = true
-                  for (fh <- fastHostL) {
-                    // 只要有一个节点空闲 就可以尝试将任务迁移过去
-                    if (currTime > hostBlockTime(fh)) {
-                      allFastHostBusy = false
-                    }
-                  }
-                  // 快节点都忙的话 要提前退出 不能迁移 (当满足数据位置的节点为空时 不应当提前结束 而应当考虑下一个任务)
-                  if (fastHostL.nonEmpty && allFastHostBusy) {
-                    logInfo(s"=====快节点都忙,跳过本轮任务转移=====")
-                    endWhile = true
-                  }
-                  else {
-                    // logInfo(s"#####当前节点对应的快节点fastHostL:${fastHostL.mkString(",")}#####")
-                    // 如果migrateTaskToFastNode返回true 就表明任务成功迁移到了快节点
-                    endWhile = migrateTaskToFastNode(fastHostL, currTime, queueMap, curIndex, tasks(curIndex), chosenSlowHost)
-                    // 这里也许并不需要将任务从数据所在地的节点移除 因为既然能够迁移成功 我们是把任务放在快节点末尾 快节点大概率可以比慢节点优先执行
-                  }
-                }
-              }
-              indexOffset += 1
-            }
-          }
-
-        }
-
+        // 做一个注释
 
         dequeueTask(execId, host, allowedLocality)
           .map {
