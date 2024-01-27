@@ -33,7 +33,8 @@ case class WorkerOffer(
     // when multiple executors are launched on the same host.
     address: Option[String] = None,
     resources: Map[String, Buffer[String]] = Map.empty,
-    resourceProfileId: Int = ResourceProfile.DEFAULT_RESOURCE_PROFILE_ID) {
+    resourceProfileId: Int = ResourceProfile.DEFAULT_RESOURCE_PROFILE_ID,
+                      ) {
   override def toString: String = s"WorkerOffer(executorId=$executorId , executorHost=${host},"+
     s" cores=$cores, address=$address," +
     s" resources=$resources, resourceProfileId=$resourceProfileId)"

@@ -173,7 +173,13 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
               }
               // 重新进行资源调度
               logInfo(s"#####################收到taskId=${taskId},在executorId=${executorId}上FINISH的消息,对executor进行任务调度##########################")
-              makeOffers(executorId)
+              // makeOffers(executorId)
+              /*START*/
+              if(!scheduler.taskIdToTaskSetManager.get(taskId).taskInfos(taskId).forSymbiosis) {
+                logInfo(s"#####forSymbiosis=True,收到taskId=${taskId},在executorId=${executorId}上FINISH的消息,不进行任务调度#####")
+                makeOffers(executorId)
+              }
+              /*END*/
             case None =>
               // Ignoring the update since we don't know about the executor.
               logWarning(s"Ignored task status update ($taskId state $state) " +
@@ -446,7 +452,11 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
           val prof = scheduler.sc.resourceProfileManager.resourceProfileFromId(rpId)
           val taskCpus = ResourceProfile.getTaskCpusOrDefaultForProfile(prof, conf)
           logInfo(s"#####################任务taskId=${task.taskId},partitionId=${task.partitionId}在executorId=${task.executorId},host=${executorData.executorHost},freeCores=${executorData.freeCores}上运行###########################")
-          executorData.freeCores -= taskCpus
+          // executorData.freeCores -= taskCpus
+          /*STRAT*/
+          // TODO 应当在这里更新核心数
+          if(!scheduler.taskIdToTaskSetManager.get(task.taskId).taskInfos(task.taskId).forSymbiosis) executorData.freeCores -= taskCpus
+          /*END*/
           task.resources.foreach { case (rName, rInfo) =>
             assert(executorData.resourcesInfo.contains(rName))
             executorData.resourcesInfo(rName).acquire(rInfo.addresses)

@@ -58,7 +58,8 @@ private[spark] class TaskDescription(
     val addedArchives: Map[String, Long],
     val properties: Properties,
     val resources: immutable.Map[String, ResourceInformation],
-    val serializedTask: ByteBuffer) {
+    val serializedTask: ByteBuffer
+                                    ) {
 
   override def toString = s"TaskDescription(taskId=$taskId, partitionId=$partitionId, executorId=$executorId, name=$name, index=$index)"
 }

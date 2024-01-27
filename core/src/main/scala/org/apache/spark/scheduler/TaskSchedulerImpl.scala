@@ -32,7 +32,7 @@ import org.apache.spark.internal.config._
 import org.apache.spark.resource.{ResourceInformation, ResourceProfile}
 import org.apache.spark.rpc.RpcEndpoint
 import org.apache.spark.scheduler.SchedulingMode.SchedulingMode
-import org.apache.spark.scheduler.TaskLocality.TaskLocality
+import org.apache.spark.scheduler.TaskLocality.{ANY, TaskLocality}
 import org.apache.spark.storage.BlockManagerId
 import org.apache.spark.util.{AccumulatorV2, Clock, SystemClock, ThreadUtils, Utils}
 
@@ -93,6 +93,11 @@ private[spark] class TaskSchedulerImpl(
   // because ExecutorAllocationClient is created after this TaskSchedulerImpl.
   private[scheduler] lazy val healthTrackerOpt = maybeCreateHealthTracker(sc)
 
+  /**
+   * Custom modifications by jaken
+   *
+   */
+  val symbiosisExec = new HashSet[String]
   val conf = sc.conf
 
   // How often to check for speculative tasks
@@ -466,6 +471,7 @@ private[spark] class TaskSchedulerImpl(
         // 返回的值是 满足了CPU要求之后，除了CPU以外的其他资源的分配方案
 
         // 如果CPU不满足要求,就返回None,自然不会将任务放置到当前executor中
+        // TODO executor的可用CPU资源为0 也应当可以调度任务 在executor中定义一个属性 如果当ANY等级调度任务的时候
         val taskResAssignmentsOpt = resourcesMeetTaskRequirements(taskSet, availableCpus(i), availableResources(i))
         // 得到了资源名和对应的地址之后，挨个处理各种资源
         //logInfo(s"=====得到了taskResAssignmentsOpt:map[资源名称:String,map[资源名称:String,资源对应的地址:Array[String]]]:$taskResAssignmentsOpt=====")
@@ -497,8 +503,20 @@ private[spark] class TaskSchedulerImpl(
               taskIdToTaskSetManager.put(tid, taskSet)
               taskIdToExecutorId(tid) = execId
               executorIdToRunningTaskIds(execId).add(tid)
+              /*START*/
+              // TODO 这里可以拿到数据本地性 然后将executor标记为超线程
+              val taskInfo = taskSet.taskInfos(task.taskId)
+              if(locality == ANY) {
+                taskInfo.forSymbiosis = true
+                logInfo(s"#####当前任务等级为ANY,在host=${host},executor=${execId}上,计为共生任务1#####")
+                symbiosisExec.add(execId)
+              }
+
+              // 如果是可共生任务 那么就不减
+              if(!taskInfo.forSymbiosis) availableCpus(i) -= taskCpus
+              /*END*/
               // 更新相应的资源
-              availableCpus(i) -= taskCpus
+              // availableCpus(i) -= taskCpus
               assert(availableCpus(i) >= 0)
               task.resources.foreach { case (rName, rInfo) =>
                 // Remove the first n elements from availableResources addresses, these removed
