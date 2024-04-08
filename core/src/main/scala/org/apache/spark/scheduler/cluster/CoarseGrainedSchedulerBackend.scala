@@ -158,7 +158,7 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
 
         // 如果收到的是任务状态完成的消息
         if (TaskState.isFinished(state)) {
-          // 这里更新executor的相关信息 所以可以在这里尝试计算executor的性能权重
+          // 这里更新executor的相关信息
           executorDataMap.get(executorId) match {
             // 更新Driver记录的executor信息
             case Some(executorInfo) =>
