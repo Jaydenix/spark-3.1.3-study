@@ -412,8 +412,7 @@ private[spark] class MapOutputTrackerMaster(
   // Fraction of total map output that must be at a location for it to considered as a preferred
   // location for a reduce task. Making this larger will focus on fewer locations where most data
   // can be read locally, but may lead to more delay in scheduling if those locations are busy.
-  private val REDUCER_PREF_LOCS_FRACTION = conf.get("spark.locs.fraction").toDouble
-
+  private val REDUCER_PREF_LOCS_FRACTION = conf.get("spark.locs.fraction","0.2").toDouble
   // HashMap for storing shuffleStatuses in the driver.
   // Statuses are dropped only by explicit de-registering.
   // Exposed for testing

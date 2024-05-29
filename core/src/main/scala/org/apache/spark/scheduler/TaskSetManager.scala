@@ -656,10 +656,10 @@ private[spark] class TaskSetManager(
   private var skipResourceOffer = false
   // 从配置文件中获取参数
   // 开始的判断的任务运行轮数
-  private val ROUND: Int = conf.get("spark.round").toInt
+  private val ROUND: Int = conf.get("spark.round","1").toInt
   private val COMPENSATE_TIME = conf.getOption("spark.compensateTime").getOrElse("0").toInt
   // 数据都在慢节点上时 将慢节点任务传送给快节点的数目
-  private val MAX_TRANS_TIMES = conf.get("spark.maxTransTimes").toInt
+  private val MAX_TRANS_TIMES = conf.get("spark.maxTransTimes","1").toInt
   // logInfo(s"ROUND = ${ROUND}")
   // 当两个executor之间的最近($executorCores)个任务的平均执行时间相差fastPerformanceThreshold倍的以上时，就认为这两个executor不是同构的
   private val fastPerformanceThreshold = 1.5
