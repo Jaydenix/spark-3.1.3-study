@@ -32,7 +32,7 @@ import org.apache.spark.internal.config.Network.RPC_ASK_TIMEOUT
 import org.apache.spark.resource.ResourceUtils
 import org.apache.spark.rpc.{RpcAddress, RpcEndpointRef, RpcEnv, ThreadSafeRpcEndpoint}
 import org.apache.spark.util.{SparkExitCode, ThreadUtils, Utils}
-import sun.java2d.marlin.MarlinUtils.logInfo
+
 
 /**
  * Proxy that relays messages to the driver.
@@ -298,7 +298,7 @@ private[spark] class ClientApp extends SparkApplication {
       map(rpcEnv.setupEndpointRef(_, Master.ENDPOINT_NAME))
     // 创建client客户端，内部包含ClientEndpoint的RPC组件
     rpcEnv.setupEndpoint("client", new ClientEndpoint(rpcEnv, driverArgs, masterEndpoints, conf))
-    logInfo(s"=====创建client RPC客户端与Master通信=====")
+    // logInfo(s"=====创建client RPC客户端与Master通信=====")
     rpcEnv.awaitTermination()
   }
 

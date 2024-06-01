@@ -488,7 +488,7 @@ private[spark] class TaskSetManager(
    * host：慢主机
    * */
   private def migrateTaskToFastNode(fastHostList: Seq[String], currTime: Long, queueMap: HashMap[String, ArrayBuffer[Int]],
-                                    index: Int, task: Task[_], host: String): Boolean =  {
+                                    index: Int, task: Task[_], host: String): Boolean = {
     for (fastHost <- fastHostList) {
       // 快节点也不堵塞
       if (currTime > hostBlockTime(fastHost)) {
@@ -656,10 +656,10 @@ private[spark] class TaskSetManager(
   private var skipResourceOffer = false
   // 从配置文件中获取参数
   // 开始的判断的任务运行轮数
-  private val ROUND: Int = conf.get("spark.round","1").toInt
+  private val ROUND: Int = conf.get("spark.round", "1").toInt
   private val COMPENSATE_TIME = conf.getOption("spark.compensateTime").getOrElse("0").toInt
   // 数据都在慢节点上时 将慢节点任务传送给快节点的数目
-  private val MAX_TRANS_TIMES = conf.get("spark.maxTransTimes","1").toInt
+  private val MAX_TRANS_TIMES = conf.get("spark.maxTransTimes", "1").toInt
   // logInfo(s"ROUND = ${ROUND}")
   // 当两个executor之间的最近($executorCores)个任务的平均执行时间相差fastPerformanceThreshold倍的以上时，就认为这两个executor不是同构的
   private val fastPerformanceThreshold = 1.5
@@ -923,7 +923,7 @@ private[spark] class TaskSetManager(
         // 这是对于当前exec来说 如果当前host是最慢的 那么就会导致slowHostList为空 因为当前host权值设置为1 达不到条件
         // 这里只是对于当前host来说 去找相对于当前host的慢节点
         // slowHostList = hostPerformanceDiffer.filter { case (_, value) => value < slowPerformanceThreshold}.toSeq
-        slowHostList = hostPerformanceDiffer.filter { case (_, value) => value < slowPerformanceThreshold}.toSeq
+        slowHostList = hostPerformanceDiffer.filter { case (_, value) => value < slowPerformanceThreshold }.toSeq
         // 如果当前host对应的慢节点为空 并且 当前节点有快节点 那就将当前节点放入慢节点集合中
         if (slowHostList.isEmpty && hostPerformanceDiffer.exists { case (_, value) => value > fastPerformanceThreshold }) {
           slowHostList = Seq((host, 1.0))
