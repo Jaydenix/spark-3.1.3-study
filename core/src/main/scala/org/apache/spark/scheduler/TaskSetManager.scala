@@ -1003,7 +1003,7 @@ private[spark] class TaskSetManager(
           logInfo(s"#####慢节点map：${slowHostList.mkString(",")}#####")
           val freeSlowHostList = slowHostList.filter {
             case (slowHost, _) => {
-              // 判断慢节点是否空闲 且 没有扫描完任务集合
+              // 判断慢节点是否空闲 且 没有扫描完任务集合 AAA
               if (hostBlockTime.contains(slowHost) && pendingTasks.forHost.contains(slowHost)) (currTime > hostBlockTime(slowHost) &&
                 hostToScanIndex(slowHost) < pendingTasks.forHost(slowHost).size)
               // 如果hostBlockTime中slowHost没出现过 说明是最初的情况
