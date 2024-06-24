@@ -443,7 +443,7 @@ private[spark] class DAGScheduler(
           val blockLocationsAndStatus: Option[BlockLocationsAndStatus] =
             blockManagerMaster.getLocationsAndStatus(blockId, blockManager.blockManagerId.host)
 
-          if (blockLocationsAndStatus.isEmpty) logInfo(s"#####查询不到当前blockId =${blockId}的位置和状态信息#####")
+          // if (blockLocationsAndStatus.isEmpty) logInfo(s"#####查询不到当前blockId =${blockId}的位置和状态信息#####")
 
           val locsAndSizePerBlock: (Seq[TaskLocation], Seq[Long]) = blockLocationsAndStatus.map { bls =>
             val blockStatus: BlockStatus = bls.status
@@ -1748,7 +1748,7 @@ private[spark] class DAGScheduler(
                   fromHdfsCachedShuffle(2) = (locs, sizes)
                 }
               }
-              logInfo(s"#####fromHdfsCachedShuffle=${fromHdfsCachedShuffle.mkString("\t")} #####")
+              // logInfo(s"#####fromHdfsCachedShuffle=${fromHdfsCachedShuffle.mkString("\t")} #####")
               (id, fromHdfsCachedShuffle)
             }.toMap
           case s: ResultStage =>
@@ -1782,7 +1782,7 @@ private[spark] class DAGScheduler(
                   fromHdfsCachedShuffle(2) = (locs, sizes)
                 }
               }
-              logInfo(s"#####fromHdfsCachedShuffle=${fromHdfsCachedShuffle.mkString("\t")} #####")
+              // logInfo(s"#####fromHdfsCachedShuffle=${fromHdfsCachedShuffle.mkString("\t")} #####")
               (id, fromHdfsCachedShuffle)
             }.toMap
         }
@@ -1797,7 +1797,7 @@ private[spark] class DAGScheduler(
           return
       }
     logInfo(s"=====调用getPreferredLocs(),计算出当前RDD=${stage.rdd}的<${partitionsToCompute.size}>个任务(分区)的数据位置=====\n")
-    logInfo(s"#####任务的数据位置为:taskIdToLocationsAndSizes=${taskIdToLocationsAndSizes}#####")
+    // logInfo(s"#####任务的数据位置为:taskIdToLocationsAndSizes=${taskIdToLocationsAndSizes}#####")
     // 重新封装一下
     // val taskIdToLocations: Map[Int, Seq[TaskLocation]]
     // stage.makeNewStageAttempt(partitionsToCompute.size, taskIdToLocations.values.toSeq)
