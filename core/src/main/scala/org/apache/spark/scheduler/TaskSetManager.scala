@@ -1046,7 +1046,11 @@ private[spark] class TaskSetManager(
             // 优先选择性能为0的主机
             val selectableHosts = freeSlowHostList.filter { case (_, value) => value == 0 }
             // 翻转性能 权值越低 被选中的几率就越大
-            val hosts = if (selectableHosts.nonEmpty) selectableHosts else freeSlowHostList.map { case (host, weight) => (host, (1.0 / weight).formatted("%.2f").toDouble) }
+            val hosts = if (selectableHosts.nonEmpty) selectableHosts.map {
+              case (host, _) => (host, 1)
+            } else freeSlowHostList.map {
+              case (host, weight) => (host, (1.0 / weight).formatted("%.2f").toDouble)
+            }
             // 如果开启了轮盘赌选择
             chosenSlowHost = if (WEIGHTED_ROULETTE_WHEEL_SELECTION) {
               val totalWeight = if (selectableHosts.nonEmpty) hosts.size else hosts.map(_._2).sum
