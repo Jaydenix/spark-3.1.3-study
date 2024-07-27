@@ -20,6 +20,8 @@ package org.apache.spark
 import org.scalatest.concurrent.{Signaler, ThreadSignaler, TimeLimits}
 import org.scalatest.time.{Millis, Span}
 
+import scala.util.Random
+
 class UnpersistSuite extends SparkFunSuite with LocalSparkContext with TimeLimits {
 
   // Necessary to make ScalaTest 3.x interrupt a thread on the JVM like ScalaTest 2.2.x
@@ -46,4 +48,30 @@ class UnpersistSuite extends SparkFunSuite with LocalSparkContext with TimeLimit
     }
     assert(sc.getRDDStorageInfo.isEmpty)
   }
+  test("random") {
+    val random = new Random()
+
+    // 生成 1000 个随机数
+    val randomValues = Array.fill(1000)(random.nextDouble())
+
+    // 检查分布情况
+    val countInRanges = randomValues.groupBy {
+      case x if x < 0.1 => "0.0-0.1"
+      case x if x < 0.2 => "0.1-0.2"
+      case x if x < 0.3 => "0.2-0.3"
+      case x if x < 0.4 => "0.3-0.4"
+      case x if x < 0.5 => "0.4-0.5"
+      case x if x < 0.6 => "0.5-0.6"
+      case x if x < 0.7 => "0.6-0.7"
+      case x if x < 0.8 => "0.7-0.8"
+      case x if x < 0.9 => "0.8-0.9"
+      case x if x < 1.0 => "0.9-1.0"
+    }.mapValues(_.length).toMap
+
+    // 输出每个区间内的随机数数量
+    countInRanges.toSeq.sortBy(_._1).foreach { case (range, count) =>
+      println(s"$range: $count")
+    }
+  }
+
 }
