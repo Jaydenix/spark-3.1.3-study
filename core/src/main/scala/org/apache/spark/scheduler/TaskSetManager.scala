@@ -671,7 +671,7 @@ private[spark] class TaskSetManager(
   private val ROUND: Int = conf.get("spark.round", "1").toInt
   private val EXEC_COMPENSATE_TIME = conf.getOption("spark.executor.compensateTime").getOrElse("300").toInt
   private val HOST_COMPENSATE_TIME = conf.getOption("spark.host.compensateTime").getOrElse("200").toInt
-  // 数据都在慢节点上时 将慢节点任务传送给快节点的数目
+  // 数据同时在快慢节点上时 将慢节点任务传送给快节点的数目
   private val MAX_TRANS_TIMES = conf.get("spark.maxTransTimes", "1").toInt
   // logInfo(s"ROUND = ${ROUND}")
   // 当两个executor之间的最近($executorCores)个任务的平均执行时间相差fastPerformanceThreshold倍的以上时，就认为这两个executor不是同构的
@@ -1053,7 +1053,7 @@ private[spark] class TaskSetManager(
             }
             // 如果开启了轮盘赌选择
             chosenSlowHost = if (WEIGHTED_ROULETTE_WHEEL_SELECTION) {
-              val totalWeight = if (selectableHosts.nonEmpty) hosts.size else hosts.map(_._2).sum
+              val totalWeight = hosts.map(_._2).sum
               weightedRandomChoice(totalWeight, hosts)
             } else {
               val randomIndex = Random.nextInt(hosts.size)
@@ -1140,7 +1140,7 @@ private[spark] class TaskSetManager(
                           // 将节点加入当前能够迁移的快节点集合中
                           fastHostL += fastHost
                         } else {
-                          // 否则 有数据在快节点上 提前在快捷点上执行 因为它可以在快节点上用好的本地性等级计算
+                          // 否则 有数据在快节点上 提前在快节点上执行 因为它可以在快节点上用好的本地性等级计算
                           dataInFast = true
                           if (!queueMap.contains(fastHost)) queueMap.put(fastHost, ArrayBuffer.empty)
                           // 一次调度最多只让迁移MAX_TRANS_TIMES次
