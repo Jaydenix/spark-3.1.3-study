@@ -260,7 +260,7 @@ private[spark] class CoarseGrainedExecutorBackend(
   }
 
   override def statusUpdate(taskId: Long, state: TaskState, data: ByteBuffer): Unit = {
-    logInfo(s"=====接收到来自TaskRunner Thread的消息13 statusUpdate,转发给driver======")
+    logInfo(s"=====接收到来自TaskRunner Thread的消息13 statusUpdate, 当前任务状态是${state}, 转发给driver======")
     val resources = taskResources.getOrElse(taskId, Map.empty[String, ResourceInformation])
     val msg = StatusUpdate(executorId, taskId, state, data, resources)
     if (TaskState.isFinished(state)) {

@@ -36,6 +36,7 @@ private sealed abstract class MessageLoop(dispatcher: Dispatcher) extends Loggin
   // List of inboxes with pending messages, to be processed by the message loop.
   private val active = new LinkedBlockingQueue[Inbox]()
 
+  // 这里会运行一个线程来循环地执行active中存放的消息 具体看receiveLoop()方法
   // Message loop task; should be run in all threads of the message loop's pool.
   protected val receiveLoopRunnable = new Runnable() {
     override def run(): Unit = receiveLoop()
@@ -66,6 +67,7 @@ private sealed abstract class MessageLoop(dispatcher: Dispatcher) extends Loggin
     try {
       while (true) {
         try {
+          // 取消息
           val inbox = active.take()
           if (inbox == MessageLoop.PoisonPill) {
             // Put PoisonPill back so that other threads can see it.
@@ -146,6 +148,7 @@ private class SharedMessageLoop(
   }
 
   def register(name: String, endpoint: RpcEndpoint): Unit = {
+    // inbox中会首先存放OnStart消息
     val inbox = new Inbox(name, endpoint)
     endpoints.put(name, inbox)
     // Mark active to handle the OnStart message.

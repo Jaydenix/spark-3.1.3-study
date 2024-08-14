@@ -678,7 +678,8 @@ private[deploy] class Master(
    * multiple executors from the same application may be launched on the same worker if the worker
    * has enough cores and memory. Otherwise, each executor grabs all the cores available on the
    * worker by default, in which case only one executor per application may be launched on each
-   * worker during one single schedule iteration.
+   * worker during one single schedule iteration.(如果没有指定executor的核心数 那么每个worker上只会运行
+   * 一个executor 且该executor占用worker的所有核心数)
    * Note that when `spark.executor.cores` is not set, we may still launch multiple executors from
    * the same application on the same worker. Consider appA and appB both have one executor running
    * on worker1, and appA.coresLeft > 0, then appB is finished and release all its cores on worker1,
@@ -691,6 +692,7 @@ private[deploy] class Master(
    * allocated at a time, 12 cores from each worker would be assigned to each executor.
    * Since 12 < 16, no executors would launch [SPARK-8881].
    */
+    // 如果没有指定executor的核心数 那么每个worker上只会运行一个executor 且该executor占用worker的所有核心数
   private def scheduleExecutorsOnWorkers(
                                           app: ApplicationInfo,
                                           usableWorkers: Array[WorkerInfo],
@@ -705,6 +707,7 @@ private[deploy] class Master(
     val numUsable = usableWorkers.length
     val assignedCores = new Array[Int](numUsable) // Number of cores to give to each worker
     val assignedExecutors = new Array[Int](numUsable) // Number of new executors on each worker
+    // 预计要分配的核心数 = 最小值(app需要的核心数,worker中可用的核心数)
     var coresToAssign = math.min(app.coresLeft, usableWorkers.map(_.coresFree).sum)
 
     /** Return whether the specified worker can launch an executor for this app. */
@@ -715,7 +718,10 @@ private[deploy] class Master(
 
       // If we allow multiple executors per worker, then we can always launch new executors.
       // Otherwise, if there is already an executor on this worker, just give it more cores.
+      // 如果指定了一个worker上只运行一个executor 那么不会创建新的executor 而是将worker上剩余的空闲核心给现有的executor
+      // 能不能新创建executor(没有指定每个worker上只能运行一个executor || 指定了但是该executor还没有被创建)
       val launchingNewExecutor = !oneExecutorPerWorker || assignedExecutorNum == 0
+      // 如果能新创建executor 那么就检查内存/其他资源满不满足要求
       if (launchingNewExecutor) {
         val assignedMemory = assignedExecutorNum * memoryPerExecutor
         val enoughMemory = usableWorkers(pos).memoryFree - assignedMemory >= memoryPerExecutor
@@ -757,6 +763,7 @@ private[deploy] class Master(
 
           // If we are launching one executor per worker, then every iteration assigns 1 core
           // to the executor. Otherwise, every iteration assigns cores to a new executor.
+          // 如果只在每个worker上运行一个executor 那么每次都会为那个executor增加一个core
           if (oneExecutorPerWorker) {
             assignedExecutors(pos) = 1
           } else {
@@ -773,6 +780,7 @@ private[deploy] class Master(
           }
         }
       }
+      // 每次都会筛选出可用的worker
       freeWorkers = freeWorkers.filter(canLaunchExecutorForApp)
     }
     if (assignedCores.isEmpty) {

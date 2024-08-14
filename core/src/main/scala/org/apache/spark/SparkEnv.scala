@@ -335,6 +335,12 @@ object SparkEnv extends Logging {
       "sort" -> classOf[org.apache.spark.shuffle.sort.SortShuffleManager].getName,
       "tungsten-sort" -> classOf[org.apache.spark.shuffle.sort.SortShuffleManager].getName)
     // 默认使用的是SHUFFLE_MANAGER=sortShuffleManager
+    /*
+    * shuffleManager 有 sort hash unsafe custom 这几种
+    * sort: 数据在缓冲区写满后，溢写到磁盘前会进行排序
+    * hash: 数据不需要排序
+    * unsafe: 直接以二进制的方式操作内存 避免序列化和反序列化的开销
+    * */
     val shuffleMgrName = conf.get(config.SHUFFLE_MANAGER)
     val shuffleMgrClass =
       shortShuffleMgrNames.getOrElse(shuffleMgrName.toLowerCase(Locale.ROOT), shuffleMgrName)
@@ -358,6 +364,7 @@ object SparkEnv extends Logging {
 
     // Mapping from block manager id to the block manager's information.
     val blockManagerInfo = new concurrent.TrieMap[BlockManagerId, BlockManagerInfo]()
+    logInfo(s"======SparkEnv中创建 blockManagerMaster=====")
     val blockManagerMaster = new BlockManagerMaster(
       registerOrLookupEndpoint(
         BlockManagerMaster.DRIVER_ENDPOINT_NAME,
@@ -381,7 +388,7 @@ object SparkEnv extends Logging {
     val blockTransferService =
       new NettyBlockTransferService(conf, securityManager, bindAddress, advertiseAddress,
         blockManagerPort, numUsableCores, blockManagerMaster.driverEndpoint)
-
+    logInfo(s"=====正在创建BlockManager:execId=${executorId}=====")
     // NB: blockManager is not valid until initialize() is called later.
     val blockManager = new BlockManager(
       executorId,

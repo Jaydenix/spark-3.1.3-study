@@ -166,7 +166,7 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
                   r.release(v.addresses)
                 }
               }
-              // 重新进行资源调度
+              // 重新进行任务调度
               logInfo(s"#####################收到taskId=${taskId}在executorId=${executorId}上FINISH的消息,对executor进行任务调度##########################")
               makeOffers(executorId)
             case None =>

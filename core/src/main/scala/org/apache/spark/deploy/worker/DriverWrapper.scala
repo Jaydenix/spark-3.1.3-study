@@ -33,6 +33,7 @@ import org.apache.spark.util._
  */
 object DriverWrapper extends Logging {
   def main(args: Array[String]): Unit = {
+    // 解析参数
     args.toList match {
       /*
        * IMPORTANT: Spark 1.3 provides a stable application submission gateway that is both

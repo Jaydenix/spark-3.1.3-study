@@ -466,6 +466,7 @@ private[spark] class BlockManager(
    * service if configured.
    */
   def initialize(appId: String): Unit = {
+    logInfo(s"=====进入初始化blockManager方法,execId=${executorId}=====")
     blockTransferService.init(this)
     externalBlockStoreClient.foreach { blockStoreClient =>
       blockStoreClient.init(appId)

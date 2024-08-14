@@ -446,7 +446,7 @@ class SparkContext(config: SparkConf) extends Logging {
         None
       }
     }
-
+    // 监听总线: 内部有一个存放事件队列的列表, 队列(又叫监听器)之间相互独立, 队列内存放的是事件, 总线会将事件发送给所有的监听器
     _listenerBus = new LiveListenerBus(_conf)
     _resourceProfileManager = new ResourceProfileManager(_conf, _listenerBus)
 
@@ -599,6 +599,7 @@ class SparkContext(config: SparkConf) extends Logging {
       System.setProperty("spark.ui.proxyBase", proxyUrl)
     }
     _ui.foreach(_.setAppId(_applicationId))
+    // 初始化driver的blockManager
     _env.blockManager.initialize(_applicationId)
     FallbackStorage.registerBlockManagerIfNeeded(_env.blockManager.master, _conf)
 

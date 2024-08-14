@@ -74,10 +74,10 @@ class BlockManagerMaster(
       maxOnHeapMemSize: Long,
       maxOffHeapMemSize: Long,
       storageEndpoint: RpcEndpointRef): BlockManagerId = {
-    logInfo(s"Registering BlockManager $id")
+    logInfo(s"[to BlockManagerMaster]Registering BlockManager $id")
     val updatedId = driverEndpoint.askSync[BlockManagerId](
       RegisterBlockManager(id, localDirs, maxOnHeapMemSize, maxOffHeapMemSize, storageEndpoint))
-    logInfo(s"Registered BlockManager $updatedId")
+    logInfo(s"[to BlockManagerMaster]Registered BlockManager $updatedId")
     updatedId
   }
 

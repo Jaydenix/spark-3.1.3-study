@@ -32,7 +32,6 @@ import org.apache.spark.internal.config.Network.RPC_ASK_TIMEOUT
 import org.apache.spark.resource.ResourceUtils
 import org.apache.spark.rpc.{RpcAddress, RpcEndpointRef, RpcEnv, ThreadSafeRpcEndpoint}
 import org.apache.spark.util.{SparkExitCode, ThreadUtils, Utils}
-import sun.java2d.marlin.MarlinUtils.logInfo
 
 /**
  * Proxy that relays messages to the driver.
@@ -134,7 +133,7 @@ private class ClientEndpoint(
   private def asyncSendToMasterAndForwardReply[T: ClassTag](message: Any): Unit = {
     // masterEndpoint是RpcEndpointRef类型
     for (masterEndpoint <- masterEndpoints) {
-      // 给master发送了消息
+      // 给master发送了消息 去Master类中的receiveAndReply方法
       masterEndpoint.ask[T](message).onComplete {
         case Success(v) => self.send(v)
         case Failure(e) =>
@@ -294,11 +293,12 @@ private[spark] class ClientApp extends SparkApplication {
     val rpcEnv =
       RpcEnv.create("driverClient", Utils.localHostName(), 0, conf, new SecurityManager(conf))
 
+    // 设置Master终端的名字
     val masterEndpoints = driverArgs.masters.map(RpcAddress.fromSparkURL).
       map(rpcEnv.setupEndpointRef(_, Master.ENDPOINT_NAME))
-    // 创建client客户端，内部包含ClientEndpoint的RPC组件
+    // 创建client客户端，内部包含ClientEndpoint的RPC组件 Endpoint类型的生命周期中 首先会调用其构造方法 然后就是OnStart方法
     rpcEnv.setupEndpoint("client", new ClientEndpoint(rpcEnv, driverArgs, masterEndpoints, conf))
-    logInfo(s"=====创建client RPC客户端与Master通信=====")
+    // logInfo(s"=====创建client RPC客户端与Master通信=====")
     rpcEnv.awaitTermination()
   }
 

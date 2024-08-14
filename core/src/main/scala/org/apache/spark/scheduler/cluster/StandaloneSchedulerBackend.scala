@@ -136,7 +136,7 @@ private[spark] class StandaloneSchedulerBackend(
     // 包含内部类ClientEndpoint并初始化,该对象是和master通信,并发送消息
     client.start()
     launcherBackend.setState(SparkAppHandle.State.SUBMITTED)
-    // 等待driver向master通信
+    // 等待driver向master通信 接下来不会继续执行用户代码 而是等待executor资源创建完毕
     waitForRegistration()
     launcherBackend.setState(SparkAppHandle.State.RUNNING)
   }

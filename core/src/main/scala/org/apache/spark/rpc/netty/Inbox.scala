@@ -54,6 +54,7 @@ private[netty] case class RemoteProcessConnectionError(cause: Throwable, remoteA
 /**
  * An inbox that stores messages for an [[RpcEndpoint]] and posts messages to it thread-safely.
  */
+ // Inbox中存放了消息列表 并且定义了所有消息的种类 在创建的时候都会首先加入OnStart方法
 private[netty] class Inbox(val endpointName: String, val endpoint: RpcEndpoint)
   extends Logging {
 
@@ -95,6 +96,7 @@ private[netty] class Inbox(val endpointName: String, val endpoint: RpcEndpoint)
         return
       }
     }
+    // 循环地取出消息 第一个消息一定是OnStart
     while (true) {
       safelyCall(endpoint) {
         message match {
