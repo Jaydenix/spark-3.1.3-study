@@ -418,15 +418,16 @@ private[spark] class DAGScheduler(
     // 获得blockManager
     val blockManager = SparkEnv.get.blockManager
     // Note: this doesn't use `getOrElse()` because this method is called O(num tasks) times
-    // 这里附加了条件 如果当前rdd不在cacheLocsAndSizes里面 并且cacheLocsAndSizes(rdd.id)中的元素存在为空的情况
     // 表明当前RDD还没有缓存记录 下面会尝试通过blockManager寻找它的位置
-    if (!cacheLocsAndSizes.contains(rdd.id) ||
-      (cacheLocsAndSizes.contains(rdd.id) && cacheLocsAndSizes(rdd.id).exists {
-        case (locs, sizes) => locs.isEmpty || sizes.isEmpty
-      })) {
+    if (!cacheLocsAndSizes.contains(rdd.id)
+//      ||
+//      (cacheLocsAndSizes.contains(rdd.id) && cacheLocsAndSizes(rdd.id).exists {
+//        case (locs, sizes) => locs.isEmpty || sizes.isEmpty
+//      })
+    ) {
+      logInfo(s"#####当前RDD=${rdd.id}不在cacheLocsAndSizes.keys=${cacheLocsAndSizes.keySet.mkString("[",",","]")}中#####")
       // Note: if the storage level is NONE, we don't need to get locations from block manager.
       val locsAndSizes: IndexedSeq[(Seq[TaskLocation], Seq[Long])] = if (rdd.getStorageLevel == StorageLevel.NONE) {
-        //logInfo(s"#####locsAndSizes = ${locsAndSizes} #####")
         IndexedSeq.fill(rdd.partitions.length)((Nil, Nil))
       } else {
         // 获取当前rdd的所有partition对应的blockIds
@@ -469,8 +470,10 @@ private[spark] class DAGScheduler(
      * Custom modifications by jaken
      * 这里投机取巧一下 清除缓存位置的同时顺便把hadoopRDD各个分区的大小也清除了
      */
+    // logInfo(s"#####cacheLocsAndSizes=${cacheLocsAndSizes.mkString("Array(", ", ", ")")}#####")
     cacheLocsAndSizes.clear()
-    logInfo("=====调用clearCacheLocs =====")
+    logInfo("=====调用clearCacheLocs清除cacheLocsAndSizes.keys=${cacheLocsAndSizes.keySet.mkString(\"[\",\",\",\"]\")}" +
+      "(仅存放当前stage中已经访问的RDD，在进入新stage前会被清除) =====")
   }
 
   /**
@@ -531,7 +534,7 @@ private[spark] class DAGScheduler(
    * locations that are still available from the previous shuffle to avoid unnecessarily
    * regenerating data.
    */
-  def  createShuffleMapStage[K, V, C](
+  def createShuffleMapStage[K, V, C](
                                       shuffleDep: ShuffleDependency[K, V, C], jobId: Int): ShuffleMapStage = {
     val rdd = shuffleDep.rdd
     // 只获得当前rdd的直系shuffle依赖 比如 A - B - C --D 其中 A-B是shuffle依赖1 B-C是shuffle依赖2 传递的RDD参数为D,那么返回的只会是依赖2
@@ -781,6 +784,7 @@ private[spark] class DAGScheduler(
     }
     true
   }
+
   // 只返回直系父stage
   private def getMissingParentStages(stage: Stage): List[Stage] = {
     // 存放的是没有分析完毕的Stage
@@ -1569,7 +1573,7 @@ private[spark] class DAGScheduler(
       case Nil => None
       case rdds => Some(rdds.maxBy(_.id))
     }
-    val cachedShuffledRDD: Option[RDD[_]] = shuffledRDDs match {
+    val cachedShuffledRDD: Option[RDD[_]] = if (shuffledRDDs.size <= 1) None else shuffledRDDs match {
       case Nil => None
       case rdds => Some(rdds.minBy(_.id))
     }
@@ -1759,10 +1763,10 @@ private[spark] class DAGScheduler(
               }
               // 没有缓存
               else {
-                if(fromHDFS) {
+                if (fromHDFS) {
                   fromHdfsCachedShuffle(0) = (locs, sizes)
                 }
-                else if(fromShuffle) {
+                else if (fromShuffle) {
                   fromHdfsCachedShuffle(2) = (locs, sizes)
                 }
               }
@@ -1826,8 +1830,8 @@ private[spark] class DAGScheduler(
     * hdfs ? cache ? shuffle? 避免大量代码的修改
     * */
     var nativeIndex = 0
-    if (fromCached) nativeIndex=1
-    else if(fromShuffle) nativeIndex=2
+    if (fromCached) nativeIndex = 1
+    else if (fromShuffle) nativeIndex = 2
     // taskIdToLocationsAndSizes: Map[Int, IndexedSeq[(Seq[TaskLocation], Seq[Long])]]
     // val t =taskIdToLocationsAndSizes.values.map(_(nativeIndex)).map(_._1).toSeq
     logInfo(s"#####nativeIndex=${nativeIndex} #####")
@@ -1901,11 +1905,11 @@ private[spark] class DAGScheduler(
             // 得到任务的数据本地性，一个任务就对应一个分区
             val locs = taskIdToLocationsAndSizes(id)(nativeIndex)._1
             val allLocsAndSize = taskIdToLocationsAndSizes(id)
-            var allSize :Long = 0
+            var allSize: Long = 0
             for (i <- allLocsAndSize.indices) {
-              if(i==0 && allLocsAndSize(i)._2.nonEmpty) allSize += allLocsAndSize(i)._2.head
+              if (i == 0 && allLocsAndSize(i)._2.nonEmpty) allSize += allLocsAndSize(i)._2.head
               else {
-                if(allLocsAndSize(i)._2.nonEmpty) {
+                if (allLocsAndSize(i)._2.nonEmpty) {
                   for (size <- allLocsAndSize(i)._2) {
                     allSize += size
                   }
@@ -1941,7 +1945,7 @@ private[spark] class DAGScheduler(
             new ResultTask(stage.id, stage.latestInfo.attemptNumber,
               taskBinary, part, locs, id, properties, serializedTaskMetrics,
               Option(jobId), Option(sc.applicationId), sc.applicationAttemptId,
-              stage.rdd.isBarrier(), allLocsAndSize,allSize)
+              stage.rdd.isBarrier(), allLocsAndSize, allSize)
           }
       }
     } catch {
@@ -2460,8 +2464,8 @@ private[spark] class DAGScheduler(
           // TODO Refactor the failure handling logic to combine similar code with that of
           // FetchFailed.
           val shouldAbortStage =
-          failedStage.failedAttemptIds.size >= maxConsecutiveStageAttempts ||
-            disallowStageRetryForTest
+            failedStage.failedAttemptIds.size >= maxConsecutiveStageAttempts ||
+              disallowStageRetryForTest
 
           if (shouldAbortStage) {
             val abortMessage = if (disallowStageRetryForTest) {

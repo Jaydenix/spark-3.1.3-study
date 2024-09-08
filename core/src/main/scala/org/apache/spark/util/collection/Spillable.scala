@@ -79,7 +79,7 @@ private[spark] abstract class Spillable[C](taskMemoryManager: TaskMemoryManager)
    * @param currentMemory estimated size of the collection in bytes
    * @return true if `collection` was spilled to disk; false otherwise
    */
-  protected def maybeSpill(collection: C, currentMemory: Long): Boolean = {
+  protected def  maybeSpill(collection: C, currentMemory: Long): Boolean = {
     var shouldSpill = false
     // 计算当前内存和溢写内存阈值，判断是否需要溢写
     // 动态扩容 myMemoryThreshold = 5M

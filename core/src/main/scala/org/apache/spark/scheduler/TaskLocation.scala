@@ -17,6 +17,8 @@
 
 package org.apache.spark.scheduler
 
+import java.net.InetAddress
+
 /**
  * A location where a task should run. This can either be a host or a (host, executorID) pair.
  * In the latter case, we will prefer to launch the task on that executorID, but our next level
@@ -44,14 +46,24 @@ case class ExecutorCacheTaskLocation(override val host: String, executorId: Stri
  * A location on a host.
  */
 private [spark] case class HostTaskLocation(override val host: String) extends TaskLocation {
-  override def toString: String = host
+  // override def toString: String = host
+  override def toString: String = if (TaskLocation.sparkLocalHostname.isEmpty) {
+    InetAddress.getByName(host).getHostAddress
+  } else {
+    host
+  }
 }
 
 /**
  * A location on a host that is cached by HDFS.
  */
 private [spark] case class HDFSCacheTaskLocation(override val host: String) extends TaskLocation {
-  override def toString: String = TaskLocation.inMemoryLocationTag + host
+  // override def toString: String = TaskLocation.inMemoryLocationTag + host
+  override def toString: String = if (TaskLocation.sparkLocalHostname.isEmpty) {
+    TaskLocation.inMemoryLocationTag + InetAddress.getByName(host).getHostAddress
+  } else {
+    TaskLocation.inMemoryLocationTag + host
+  }
 }
 
 private[spark] object TaskLocation {
@@ -59,6 +71,8 @@ private[spark] object TaskLocation {
   // underscores, which are not legal characters in hostnames, there should be no potential for
   // confusion.  See  RFC 952 and RFC 1123 for information about the format of hostnames.
   val inMemoryLocationTag = "hdfs_cache_"
+
+  val sparkLocalHostname: Option[String] = sys.env.get("SPARK_LOCAL_HOSTNAME")
 
   // Identify locations of executors with this prefix.
   val executorLocationTag = "executor_"
