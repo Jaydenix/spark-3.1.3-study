@@ -1534,7 +1534,7 @@ private[spark] class DAGScheduler(
      */
     val tracker = SparkEnv.get.mapOutputTracker.asInstanceOf[MapOutputTrackerMaster]
     //    val dep = rdd.dependencies.head.asInstanceOf[ShuffleDependency[K, V, C]]
-    logInfo(s"#####tracker.shuffleStatuses=\n${tracker.shuffleStatuses.mkString("\n")} #####")
+    logInfo(s"#####tracker.shuffleStatuses(0)=\n${tracker.shuffleStatuses.head} #####")
     // logInfo(s"#####shuffleIdToMapStage=\n${shuffleIdToMapStage.mkString("\n")} #####")
     val narrowAncestors = stage.rdd.getNarrowAncestors
     logInfo(s"#####getNarrowAncestors=\n${narrowAncestors},rddId=${narrowAncestors.map(_.id)} #####")
@@ -1770,7 +1770,7 @@ private[spark] class DAGScheduler(
                   fromHdfsCachedShuffle(2) = (locs, sizes)
                 }
               }
-              logInfo(s"#####fromHdfsCachedShuffle=${fromHdfsCachedShuffle.mkString("\t")} #####")
+              // logInfo(s"#####fromHdfsCachedShuffle=${fromHdfsCachedShuffle.mkString("\t")} #####")
               (id, fromHdfsCachedShuffle)
             }.toMap
           case s: ResultStage =>
@@ -1804,7 +1804,7 @@ private[spark] class DAGScheduler(
                   fromHdfsCachedShuffle(2) = (locs, sizes)
                 }
               }
-              logInfo(s"#####fromHdfsCachedShuffle=${fromHdfsCachedShuffle.mkString("\t")} #####")
+              // logInfo(s"#####fromHdfsCachedShuffle=${fromHdfsCachedShuffle.mkString("\t")} #####")
               (id, fromHdfsCachedShuffle)
             }.toMap
         }
@@ -1819,7 +1819,8 @@ private[spark] class DAGScheduler(
           return
       }
     logInfo(s"=====调用getPreferredLocs(),计算出当前RDD=${stage.rdd}的<${partitionsToCompute.size}>个任务(分区)的数据位置=====\n")
-    logInfo(s"#####任务的数据位置为:taskIdToLocationsAndSizes=${taskIdToLocationsAndSizes}#####")
+    logInfo(s"#####任务的数据位置为:taskIdToLocationsAndSizes.head=${taskIdToLocationsAndSizes.head}#####")
+    logInfo(s"#####任务的数据位置为:taskIdToLocationsAndSizes.tail=${taskIdToLocationsAndSizes.tail}#####")
     // 重新封装一下
     // val taskIdToLocations: Map[Int, Seq[TaskLocation]]
     // stage.makeNewStageAttempt(partitionsToCompute.size, taskIdToLocations.values.toSeq)
@@ -1954,7 +1955,7 @@ private[spark] class DAGScheduler(
         runningStages -= stage
         return
     }
-    logInfo(s"#####将stage=${stage}拆分成了tasks序列,前20个task为 \n${tasks.take(20).mkString("\n")}#####")
+    logInfo(s"#####将stage=${stage}拆分成了tasks序列,前10个task为 \n${tasks.take(10).mkString("\n")}#####")
     if (tasks.nonEmpty) {
       logInfo(s"Submitting ${tasks.size} missing tasks from $stage (${stage.rdd}) (first 15 " +
         s"tasks are for partitions ${tasks.take(15).map(_.partitionId)})")
