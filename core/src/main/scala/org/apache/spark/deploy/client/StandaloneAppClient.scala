@@ -196,7 +196,7 @@ private[spark] class StandaloneAppClient(
 
       // 处理消息8 修改driver中executor对应的状态
       case ExecutorUpdated(id, state, message, exitStatus, workerHost) =>
-        logInfo(s"=====Driver处理消息8 ExecutorUpdated,更新executor的状态，,execId=${id},state=${state}=====")
+        logInfo(s"=====Driver处理消息8 ExecutorUpdated,更新executor的状态,execId=${id},state=${state}=====")
         val fullId = appId + "/" + id
         val messageText = message.map(s => " (" + s + ")").getOrElse("")
         logInfo("Executor updated: %s is now %s%s".format(fullId, state, messageText))

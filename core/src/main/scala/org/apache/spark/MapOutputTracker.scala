@@ -730,7 +730,7 @@ private[spark] class MapOutputTrackerMaster(
             }
             mapIdx = mapIdx + 1
           }
-          logInfo(s"#####DownStreamTaskPartitionId=${reducerId},DownStreamInputSize=${totalOutputSize}#####")
+          // logInfo(s"#####DownStreamTaskPartitionId=${reducerId},DownStreamInputSize=${totalOutputSize}#####")
           // 如果存在某些任务块中的数据 / reduce任务需要的总数据 < 阈值(默认0.2),表示当前块中的数据量太小,不将其考虑到影响数据本地性的因素中
           val topLocs = locs.filter { case (loc, size) =>
             size.toDouble / totalOutputSize >= fractionThreshold
@@ -749,7 +749,7 @@ private[spark] class MapOutputTrackerMaster(
    * Custom modifications by jaken
    *
    */
-  def  getLocationsAndSizesWithLargestOutputs(
+  def getLocationsAndSizesWithLargestOutputs(
                                       shuffleId: Int,
                                       reducerId: Int,
                                       numReducers: Int,
@@ -783,7 +783,7 @@ private[spark] class MapOutputTrackerMaster(
             }
             mapIdx = mapIdx + 1
           }
-          logInfo(s"#####DownStreamTaskPartitionId=${reducerId},DownStreamInputSize=${totalOutputSize}#####")
+          // logInfo(s"#####DownStreamTaskPartitionId=${reducerId},DownStreamInputSize=${totalOutputSize}#####")
           // 如果存在某些任务块中的数据 / reduce任务需要的总数据 < 阈值(默认0.2),表示当前块中的数据量太小,不将其考虑到影响数据本地性的因素中
           val topLocs = locs.filter { case (loc, size) =>
             size.toDouble / totalOutputSize >= fractionThreshold

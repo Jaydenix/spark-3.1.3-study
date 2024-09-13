@@ -211,7 +211,7 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
 
       // 处理消息11
       case LaunchedExecutor(executorId) =>
-        logInfo(s"=====Driver处理消息11 LaunchedExecutor=====")
+        logInfo(s"=====Driver处理消息11 LaunchedExecutor,更新executor的可用核心数, 此时executor才是可用的=====")
         executorDataMap.get(executorId).foreach { data =>
           data.freeCores = data.totalCores
         }

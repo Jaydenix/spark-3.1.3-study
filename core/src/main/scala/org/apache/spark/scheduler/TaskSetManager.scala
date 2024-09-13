@@ -422,7 +422,7 @@ private[spark] class TaskSetManager(
                                    host: String,
                                    maxLocality: TaskLocality.Value,
                                    speculative: Boolean): Option[(Int, TaskLocality.Value, Boolean)] = {
-    if(speculative) {
+    /*if(speculative) {
       logInfo(s"#####触发推测执行,speculatableTasks=${speculatableTasks},maxLocality=${maxLocality}\n " +
         s"前20个pendingSpeculatableTasks.forExecutor=${pendingSpeculatableTasks.forExecutor.take(20)}\n" +
         s"前20个pendingSpeculatableTasks.forHost=${pendingSpeculatableTasks.forHost.take(20)}\n" +
@@ -430,7 +430,7 @@ private[spark] class TaskSetManager(
         s"前20个pendingSpeculatableTasks.forRack=${pendingSpeculatableTasks.forRack.take(20)}\n" +
         s"前20个pendingSpeculatableTasks.all=${pendingSpeculatableTasks.all.take(20)}\n" +
         "#####)")
-    }
+    }*/
     if (speculative && speculatableTasks.isEmpty) {
       return None
     }

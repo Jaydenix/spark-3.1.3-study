@@ -420,7 +420,7 @@ private[spark] class TaskSchedulerImpl(
         //logInfo(s"=====得到了taskResAssignmentsOpt:map[资源名称:String,map[资源名称:String,资源对应的地址:Array[String]]]:$taskResAssignmentsOpt=====")
         //logInfo(s"=====当前executor:$execId $host=====")
         //logInfo(s">>>>>五.<开始>遍历除CPU外的每种资源 >>>>>")
-        logInfo(s"#####executor:${execId}满足CPU要求后的其他资源分配方案taskResAssignmentsOpt=${taskResAssignmentsOpt}#####")
+        //logInfo(s"#####executor:${execId}满足CPU要求后的其他资源分配方案taskResAssignmentsOpt=${taskResAssignmentsOpt}#####")
         taskResAssignmentsOpt.foreach { taskResAssignments =>
           try {
             val prof = sc.resourceProfileManager.resourceProfileFromId(taskSetRpID)
