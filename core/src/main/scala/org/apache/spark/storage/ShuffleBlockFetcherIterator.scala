@@ -540,7 +540,7 @@ final class ShuffleBlockFetcherIterator(
   private[this] def initialize(): Unit = {
     // Add a task completion callback (called in both success case and failure case) to cleanup.
     context.addTaskCompletionListener(onCompleteCallback)
-
+    // 获得要拉取数据的位置和大小 包括exec内部的数据 主机的数据 远程拉取的数据
     // Partition blocks by the different fetch modes: local, host-local and remote blocks.
     val remoteRequests = partitionBlocksByFetchMode()
     // Add the remote requests into our queue in a random order
@@ -552,7 +552,7 @@ final class ShuffleBlockFetcherIterator(
 
     // Send out initial requests for blocks, up to our maxBytesInFlight
     fetchUpToMaxBytes()
-
+    // numFetches表示拉取数据请求的个数 比如当前host有2个exec，总共使用15个exec，如果数据广泛分布在所有exec上，那么numFetches=13
     val numFetches = remoteRequests.size - fetchRequests.size
     logInfo(s"Started $numFetches remote fetches in ${Utils.getUsedTimeNs(startTimeNs)}")
 

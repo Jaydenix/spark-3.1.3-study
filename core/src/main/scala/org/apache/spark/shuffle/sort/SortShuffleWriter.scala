@@ -50,7 +50,11 @@ private[spark] class SortShuffleWriter[K, V, C](
   /** Write a bunch of records to this task's output */
   // 这个records 就是当前task的逻辑计算结果,是一个遍历输入数据的迭代器,实际上并没有真正计算
   override def write(records: Iterator[Product2[K, V]]): Unit = {
-    // 判断是否开启了map端的合并 aggregator参数会有所不同
+    // 判断是否开启了map端的合并 aggregator参数会有所不同,
+    // 例：val rdd = sc.parallelize(Seq(("a", 1), ("a", 2), ("b", 1), ("a", 3)))
+    //    val reducedRdd = rdd.reduceByKey(_ + _)
+    // (a, 1)、(a, 2)、(a, 3) 合并成 (a, 6)，然后再传输到 reduce 阶段。
+    // map段预聚合：数据在写入磁盘之前会进行聚合，减少网络传输数据量
     sorter = if (dep.mapSideCombine) {
       // 需要map端预聚合 那就要指定聚合器和排序器
       new ExternalSorter[K, V, C](

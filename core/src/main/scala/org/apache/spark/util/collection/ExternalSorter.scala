@@ -194,13 +194,13 @@ private[spark] class ExternalSorter[K, V, C](
       val update = (hadValue: Boolean, oldValue: C) => {
         if (hadValue) mergeValue(oldValue, kv._2) else createCombiner(kv._2)
       }
-      // 一个一个遍历逻辑数据
+      // 一个一个遍历输入数据
       while (records.hasNext) {
         // 读数据的计数器++
         addElementsRead()
-        // 写入数据
+        // 执行计算逻辑 kv是计算的结果,即真实数据
         kv = records.next()
-        // 执行聚合的逻辑
+        // 执行预聚合的逻辑
         map.changeValue((getPartition(kv._1), kv._1), update)
         // 判断是否需要溢写
         maybeSpillCollection(usingMap = true)

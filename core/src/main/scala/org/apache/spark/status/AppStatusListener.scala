@@ -43,11 +43,11 @@ import org.apache.spark.ui.scope._
  *                       unfinished tasks can be more accurately calculated (see SPARK-21922).
  */
 private[spark] class AppStatusListener(
-    kvstore: ElementTrackingStore,
-    conf: SparkConf,
-    live: Boolean,
-    appStatusSource: Option[AppStatusSource] = None,
-    lastUpdateTime: Option[Long] = None) extends SparkListener with Logging {
+                                        kvstore: ElementTrackingStore,
+                                        conf: SparkConf,
+                                        live: Boolean,
+                                        appStatusSource: Option[AppStatusSource] = None,
+                                        lastUpdateTime: Option[Long] = None) extends SparkListener with Logging {
 
   private var sparkVersion = SPARK_VERSION
   private var appInfo: v1.ApplicationInfo = null
@@ -87,8 +87,7 @@ private[spark] class AppStatusListener(
   /** The last time when flushing `LiveEntity`s. This is to avoid flushing too frequently. */
   private var lastFlushTimeNs = System.nanoTime()
 
-  kvstore.addTrigger(classOf[ExecutorSummaryWrapper], conf.get(MAX_RETAINED_DEAD_EXECUTORS))
-    { count => cleanupExecutors(count) }
+  kvstore.addTrigger(classOf[ExecutorSummaryWrapper], conf.get(MAX_RETAINED_DEAD_EXECUTORS)) { count => cleanupExecutors(count) }
 
   kvstore.addTrigger(classOf[JobDataWrapper], conf.get(MAX_RETAINED_JOBS)) { count =>
     cleanupJobs(count)
@@ -294,12 +293,12 @@ private[spark] class AppStatusListener(
   }
 
   override def onExecutorBlacklistedForStage(
-      event: SparkListenerExecutorBlacklistedForStage): Unit = {
+                                              event: SparkListenerExecutorBlacklistedForStage): Unit = {
     updateExclusionStatusForStage(event.stageId, event.stageAttemptId, event.executorId)
   }
 
   override def onExecutorExcludedForStage(
-      event: SparkListenerExecutorExcludedForStage): Unit = {
+                                           event: SparkListenerExecutorExcludedForStage): Unit = {
     updateExclusionStatusForStage(event.stageId, event.stageAttemptId, event.executorId)
   }
 
@@ -361,7 +360,7 @@ private[spark] class AppStatusListener(
   }
 
   private def updateNodeExclusionStatusForStage(stageId: Int, stageAttemptId: Int,
-      hostId: String): Unit = {
+                                                hostId: String): Unit = {
     val now = System.nanoTime()
 
     // Implicitly exclude every available executor for the stage associated with this node
@@ -377,7 +376,7 @@ private[spark] class AppStatusListener(
   }
 
   private def updateExclusionStatusForStage(stageId: Int, stageAttemptId: Int,
-      execId: String): Unit = {
+                                            execId: String): Unit = {
     val now = System.nanoTime()
 
     Option(liveStages.get((stageId, stageAttemptId))).foreach { stage =>
@@ -517,10 +516,14 @@ private[spark] class AppStatusListener(
 
       job.status = event.jobResult match {
         case JobSucceeded =>
-          appStatusSource.foreach{_.SUCCEEDED_JOBS.inc()}
+          appStatusSource.foreach {
+            _.SUCCEEDED_JOBS.inc()
+          }
           JobExecutionStatus.SUCCEEDED
         case JobFailed(_) =>
-          appStatusSource.foreach{_.FAILED_JOBS.inc()}
+          appStatusSource.foreach {
+            _.FAILED_JOBS.inc()
+          }
           JobExecutionStatus.FAILED
       }
 
@@ -944,6 +947,12 @@ private[spark] class AppStatusListener(
       // Update stage level peak executor metrics.
       updateStageLevelPeakExecutorMetrics(key._1, key._2, event.execId, peakUpdates, now)
     }
+    // 打印当前所有任务的Metrics
+    // logInfo(s"##### 当前所有正在运行任务的Metrics[${liveTasks.size}],Ids=${liveTasks.keys.mkString("[",",","]")}: #####")
+    /*liveTasks.foreach { case (taskId, taskInfo) =>
+      val metrics: v1.TaskMetrics = taskInfo.getMetrics // 获取每个任务的metrics
+      logInfo(s"TaskID: $taskId, Metrics: ${metrics}")
+    }*/
 
     // Flush updates if necessary. Executor heartbeat is an event that happens periodically. Flush
     // here to ensure the staleness of Spark UI doesn't last more than
@@ -974,11 +983,11 @@ private[spark] class AppStatusListener(
   }
 
   private def updateStageLevelPeakExecutorMetrics(
-      stageId: Int,
-      stageAttemptId: Int,
-      executorId: String,
-      executorMetrics: ExecutorMetrics,
-      now: Long): Unit = {
+                                                   stageId: Int,
+                                                   stageAttemptId: Int,
+                                                   executorId: String,
+                                                   executorMetrics: ExecutorMetrics,
+                                                   now: Long): Unit = {
     Option(liveStages.get((stageId, stageAttemptId))).foreach { stage =>
       if (stage.peakExecutorMetrics.compareAndUpdatePeakValues(executorMetrics)) {
         update(stage, now)
@@ -1145,8 +1154,8 @@ private[spark] class AppStatusListener(
   }
 
   private def updateBroadcastBlock(
-      event: SparkListenerBlockUpdated,
-      broadcast: BroadcastBlockId): Unit = {
+                                    event: SparkListenerBlockUpdated,
+                                    broadcast: BroadcastBlockId): Unit = {
     val executorId = event.blockUpdatedInfo.blockManagerId.executorId
     liveExecutors.get(executorId).foreach { exec =>
       val now = System.nanoTime()
@@ -1162,10 +1171,10 @@ private[spark] class AppStatusListener(
   }
 
   private[spark] def updateExecutorMemoryDiskInfo(
-      exec: LiveExecutor,
-      storageLevel: StorageLevel,
-      memoryDelta: Long,
-      diskDelta: Long): Unit = {
+                                                   exec: LiveExecutor,
+                                                   storageLevel: StorageLevel,
+                                                   memoryDelta: Long,
+                                                   diskDelta: Long): Unit = {
     if (exec.hasMemoryInfo) {
       if (storageLevel.useOffHeap) {
         exec.usedOffHeap = addDeltaToValue(exec.usedOffHeap, memoryDelta)
@@ -1185,8 +1194,8 @@ private[spark] class AppStatusListener(
   }
 
   private def killedTasksSummary(
-      reason: TaskEndReason,
-      oldSummary: Map[String, Int]): Map[String, Int] = {
+                                  reason: TaskEndReason,
+                                  oldSummary: Map[String, Int]): Map[String, Int] = {
     reason match {
       case k: TaskKilled =>
         oldSummary.updated(k.reason, oldSummary.getOrElse(k.reason, 0) + 1)

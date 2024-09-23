@@ -518,6 +518,7 @@ abstract class SparkListener extends SparkListenerInterface {
 
   override def onApplicationEnd(applicationEnd: SparkListenerApplicationEnd): Unit = { }
 
+  // 进入到AppStatusListener(也就是历史服务器中查看到的数据)中查看具体的指标更新方法
   override def onExecutorMetricsUpdate(
       executorMetricsUpdate: SparkListenerExecutorMetricsUpdate): Unit = { }
 

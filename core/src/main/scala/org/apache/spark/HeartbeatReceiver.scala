@@ -128,6 +128,10 @@ private[spark] class HeartbeatReceiver(sc: SparkContext, clock: Clock)
 
     // Messages received from executors
     case heartbeat @ Heartbeat(executorId, accumUpdates, blockManagerId, executorUpdates) =>
+      // logInfo(s"#####
+      // [心跳]接收到来自execId=${executorId}的消息,携带的信息如下：" +
+//        s"\naccumUpdates=${accumUpdates.mkString("\n")}" +
+//        s"\nexecutorUpdates=${executorUpdates.mkString("\n")}#####")
       var reregisterBlockManager = !sc.isStopped
       if (scheduler != null) {
         if (executorLastSeen.contains(executorId)) {

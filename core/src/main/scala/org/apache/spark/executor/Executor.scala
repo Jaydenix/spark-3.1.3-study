@@ -135,7 +135,7 @@ private[spark] class Executor(
     } else {
       None
     }
-  logInfo(s"=====8.metricsSystem 监视线程的任务执行情况=====")
+  logInfo(s"=====10.metricsSystem 监视线程的executor执行情况=====")
   if (!isLocal) {
     env.blockManager.initialize(conf.getAppId)
     env.metricsSystem.registerSource(executorSource)
@@ -193,12 +193,12 @@ private[spark] class Executor(
   private val HEARTBEAT_DROP_ZEROES = conf.get(EXECUTOR_HEARTBEAT_DROP_ZERO_ACCUMULATOR_UPDATES)
 
   /**
-   * Interval to send heartbeats, in milliseconds
+   * Interval to send heartbeats, in milliseconds 心跳发送的间隔 默认10s
    */
   private val HEARTBEAT_INTERVAL_MS = conf.get(EXECUTOR_HEARTBEAT_INTERVAL)
 
   /**
-   * Interval to poll for executor metrics, in milliseconds
+   * Interval to poll for executor metrics, in milliseconds 轮询executor指标的间隔 默认和心跳一起发送 i.e.pollOnHeartbeat = true
    */
   private val METRICS_POLLING_INTERVAL_MS = conf.get(EXECUTOR_METRICS_POLLING_INTERVAL)
 
@@ -210,12 +210,15 @@ private[spark] class Executor(
     METRICS_POLLING_INTERVAL_MS,
     executorMetricsSource)
 
+  // 创建心跳线程 它会定期执行reportHeartBeat()方法 向Driver汇报executor当前运行任务的指标
   // Executor for the heartbeat task.
   private val heartbeater = new Heartbeater(
+    // 进reportHeartBeat
     () => Executor.this.reportHeartBeat(),
     "executor-heartbeater",
     HEARTBEAT_INTERVAL_MS)
 
+  // 创建心跳接收器(本质是和driver通信)
   // must be initialized before running startDriverHeartbeat()
   private val heartbeatReceiverRef =
     RpcUtils.makeDriverRef(HeartbeatReceiver.ENDPOINT_NAME, conf, env.rpcEnv)
@@ -619,9 +622,12 @@ private[spark] class Executor(
         executorSource.METRIC_DISK_BYTES_SPILLED.inc(task.metrics.diskBytesSpilled)
         executorSource.METRIC_MEMORY_BYTES_SPILLED.inc(task.metrics.memoryBytesSpilled)
 
+        // logInfo(s"#####taskId=${taskId},task.partitionId=${task.partitionId},task.metrics=${task.metrics}#####")
+
         // Note: accumulator updates must be collected after TaskMetrics is updated
         val accumUpdates = task.collectAccumulatorUpdates()
         val metricPeaks = metricsPoller.getTaskMetricPeaks(taskId)
+        // 将任务的执行结果 metrics信息一起发送给driver
         // TODO: do not serialize value twice
         val directResult = new DirectTaskResult(valueBytes, accumUpdates, metricPeaks)
         val serializedDirectResult = ser.serialize(directResult)
@@ -996,6 +1002,7 @@ private[spark] class Executor(
   /** Reports heartbeat and metrics for active tasks to the driver. */
   private def reportHeartBeat(): Unit = {
     // list of (task id, accumUpdates) to send back to the driver
+    // driver收到的是(任务id[注意不是分区id],指标)
     val accumUpdates = new ArrayBuffer[(Long, Seq[AccumulatorV2[_, _]])]()
     val curGCTime = computeTotalGcTime()
 
@@ -1004,11 +1011,13 @@ private[spark] class Executor(
     }
 
     val executorUpdates = metricsPoller.getExecutorUpdates()
-
+    // taskRunner就是执行任务的线程
     for (taskRunner <- runningTasks.values().asScala) {
       if (taskRunner.task != null) {
+        // task.metrics 其实就是TaskMetrics
         taskRunner.task.metrics.mergeShuffleReadMetrics()
         taskRunner.task.metrics.setJvmGCTime(curGCTime - taskRunner.startGCTime)
+        // 得到要汇报给driver的任务指标
         val accumulatorsToReport =
           if (HEARTBEAT_DROP_ZEROES) {
             taskRunner.task.metrics.accumulators().filterNot(_.isZero)
@@ -1022,6 +1031,7 @@ private[spark] class Executor(
     val message = Heartbeat(executorId, accumUpdates.toArray, env.blockManager.blockManagerId,
       executorUpdates)
     try {
+      // 发送心跳信息给Driver
       val response = heartbeatReceiverRef.askSync[HeartbeatResponse](
         message, new RpcTimeout(HEARTBEAT_INTERVAL_MS.millis, EXECUTOR_HEARTBEAT_INTERVAL.key))
       if (!executorShutdown.get && response.reregisterBlockManager) {

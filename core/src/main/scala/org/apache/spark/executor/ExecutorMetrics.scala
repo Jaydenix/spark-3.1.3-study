@@ -85,6 +85,8 @@ class ExecutorMetrics private[spark] extends Serializable {
     }
     updated
   }
+
+  override def toString = s"ExecutorMetrics(${metrics.mkString("Array(", ", ", ")")})"
 }
 
 private[spark] object ExecutorMetrics {

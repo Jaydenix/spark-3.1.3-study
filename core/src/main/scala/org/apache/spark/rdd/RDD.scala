@@ -350,7 +350,7 @@ abstract class RDD[T: ClassTag](
    * 返回的Iterator遍历的是分区中的数据
    */
   final def iterator(split: Partition, context: TaskContext): Iterator[T] = {
-    // !=StorageLevel.NONE 说明当前任务的末尾RDD有缓存
+    // !=StorageLevel.NONE 说明当前任务的末尾RDD有缓存或者持久化了
     if (storageLevel != StorageLevel.NONE) {
       getOrCompute(split, context)
     } else {
@@ -403,6 +403,8 @@ abstract class RDD[T: ClassTag](
   private[spark] def getOrCompute(partition: Partition, context: TaskContext): Iterator[T] = {
     val blockId = RDDBlockId(id, partition.index)
     var readCachedBlock = true
+    // 对于第一次出现的被标记为缓存的RDD(实际上并未被缓存)
+    // getOrElseUpdate方法会首先通过computeOrReadCheckpoint获得该RDD当前分区的数据 然后将再数据缓存
     // This method is called on executors, so we need call SparkEnv.get instead of sc.env.
     SparkEnv.get.blockManager.getOrElseUpdate(blockId, storageLevel, elementClassTag, () => {
       readCachedBlock = false

@@ -531,6 +531,9 @@ private[spark] class TaskSchedulerImpl(
     }
   }
 
+  private var needWait = true
+  private var waitTimeStart = 0L
+
   /**
    * Called by cluster manager to offer resources on workers. We respond by asking our active task
    * sets for tasks in order of priority. We fill each node with tasks in a round-robin manner so
@@ -589,7 +592,7 @@ private[spark] class TaskSchedulerImpl(
     }.getOrElse(offers)
 
     // 得到的是打乱顺序的可用的executor的资源信息
-    val shuffledOffers = shuffleOffers(filteredOffers)
+    var shuffledOffers = shuffleOffers(filteredOffers)
     if (offers.nonEmpty) {
       logInfo(s"=====将executor(workOffer)的顺序打乱=${shuffledOffers}=====")
     }
@@ -705,6 +708,45 @@ private[spark] class TaskSchedulerImpl(
           // 反之跳出循环,以下一等级调度任务
           do {
             logInfo(s"#################################以${currentMaxLocality}等级调度任务#####################################")
+            // TODO adapt for cluster mode
+            // needWait是一个标识 所有应用只会等待一次
+            if (conf.get("spark.exec.wait", "false").toBoolean && needWait &&
+              // 如果当前调度的任务集中任务的数量 比
+              // [集群中可用的线程数(executorIdToHost.size * conf.get("spark.executor.cores","1").toInt)还少]/现将这个值改成executor的数目
+              // 表明没有等待的必要 因为该任务集不会使用集群中的所有资源
+              taskSet.numTasks >= executorIdToHost.size) {
+              // 如果有"spark.ready.hosts"个主机已经准备好executor了,表明除了driver所在节点的executor,其他节点上也有可用executor
+              if (shuffledOffers.filter(o => o.cores != 0).map(_.host).distinct.size < conf.get("spark.ready.hosts", "2").toInt) {
+                if (waitTimeStart == 0L) waitTimeStart = clock.getTimeMillis()
+                logInfo(s"=====等待除driver节点外其他节点上的可用executor=====")
+                shuffledOffers = IndexedSeq.empty
+              }
+              else {
+                needWait = false
+                logInfo(s"=====等待exec启动${clock.getTimeMillis() - waitTimeStart}ms,当前应用无需再等待=====")
+              }
+            }
+            // 获取已完成任务的指标
+            /*// 输出已经完成任务的指标信息
+            for ((taskId, taskInfo) <- taskSet.taskInfos) {
+              // 只在任务完成后获取累加器信息
+              if (taskInfo.finished) {
+                logInfo(s"##### taskId=$taskId, index=${taskInfo.index}, " +
+                  s"duration=${taskInfo.duration}, finished=${taskInfo.finished} #####")
+                // 遍历任务的累加器信息
+                taskInfo.accumulables.foreach { accInfo =>
+                  val name = accInfo.name.getOrElse("Unnamed")
+                  // update表示该任务的在当前指标下的值
+                  val update = accInfo.update.getOrElse("No Update")
+                  // value表示当前指标下所有任务的累加值
+                  val value = accInfo.value.getOrElse("No Value")
+                  logInfo(s"Metric: $name, Update: $update, Value: $value")
+                }
+              } else {
+                logInfo(s"Task $taskId is still running or not finished yet.")
+              }
+            }*/
+
             // 真正开始调度任务集中的单个任务集，返回值为(调度是否被拒绝 , 任务集中最小的数据本地性等级)
             // 关键点minLocality，决定了是否退出循环
             // resourceOfferSingleTaskSet() 内部遍历所有executor,只在executor上最多放1个task
@@ -1215,7 +1257,7 @@ private[spark] class TaskSchedulerImpl(
 
   def hasExecutorsAliveOnHost(host: String): Boolean = synchronized {
     logInfo(s"#####hostToExecutors=${hostToExecutors}#####")
-    val res =hostToExecutors.get(host)
+    val res = hostToExecutors.get(host)
       .exists(executors => executors.exists(e => !isExecutorDecommissioned(e)))
     logInfo(s"=====进入hasExecutorsAliveOnHost()方法,host=${host},hostToExecutors.get(host)=${hostToExecutors.get(host)},executors.exists(e => !isExecutorDecommissioned(e))=${res}=====")
     res

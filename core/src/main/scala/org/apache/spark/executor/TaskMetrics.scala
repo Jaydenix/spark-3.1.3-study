@@ -206,7 +206,7 @@ class TaskMetrics private[spark] () extends Serializable {
   // Only used for test
   private[spark] val testAccum = sys.props.get(IS_TESTING.key).map(_ => new LongAccumulator)
 
-
+  // nameToAccums记录了taskMetrics中的所有指标
   import InternalAccumulator._
   @transient private[spark] lazy val nameToAccums = LinkedHashMap(
     EXECUTOR_DESERIALIZE_TIME -> _executorDeserializeTime,
@@ -265,6 +265,10 @@ class TaskMetrics private[spark] () extends Serializable {
     // value will be updated at driver side.
     internalAccums.filter(a => !a.isZero || a == _resultSize)
   }
+
+  override def toString = s"TaskMetrics[nameToAccums](${nameToAccums.map { case (name, value) =>
+    f"  $name%-40s: $value"
+  }.mkString("\n")})"
 }
 
 

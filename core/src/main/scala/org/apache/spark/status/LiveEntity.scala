@@ -128,6 +128,8 @@ private class LiveTask(
   // The task metrics use a special value when no metrics have been reported. The special value is
   // checked when calculating indexed values when writing to the store (see [[TaskDataWrapper]]).
   private var metrics: v1.TaskMetrics = createMetrics(default = -1L)
+  // 添加一个公共的访问器方法来获取 metrics
+  def getMetrics: v1.TaskMetrics = metrics
 
   var errorMessage: Option[String] = None
 

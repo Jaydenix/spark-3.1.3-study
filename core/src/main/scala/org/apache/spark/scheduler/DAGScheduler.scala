@@ -2030,6 +2030,12 @@ private[spark] class DAGScheduler(
             e)
       }
     }
+   /* logInfo(s"##### task partitionId: ${task.partitionId} ##### ")
+    event.taskInfo.accumulables.foreach { accInfo =>
+      val name = accInfo.name.getOrElse("Unnamed")
+      val value = accInfo.value.getOrElse("No Value")
+      logInfo(s"Accumulator: $name, Value: $value")
+    }*/
   }
 
   private def postTaskEnd(event: CompletionEvent): Unit = {
@@ -3054,7 +3060,7 @@ private[scheduler] class DAGSchedulerEventProcessLoop(dagScheduler: DAGScheduler
 
     case GettingResultEvent(taskInfo) =>
       dagScheduler.handleGetTaskResult(taskInfo)
-
+      // 处理已经完成的任务 更新任务的metrics信息等
     case completion: CompletionEvent =>
       dagScheduler.handleTaskCompletion(completion)
 

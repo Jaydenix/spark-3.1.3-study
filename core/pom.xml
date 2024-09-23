@@ -33,8 +33,14 @@
   <properties>
     <sbt.project.name>core</sbt.project.name>
   </properties>
-  
+
   <dependencies>
+    <!-- 加入解析Json数据的包(通过RestApi获取)  /-->
+    <dependency>
+      <groupId>com.typesafe.play</groupId>
+      <artifactId>play-json_2.12</artifactId>  <!-- 适配 Scala 2.13 -->
+      <version>2.10.0-RC6</version>  <!-- 最新稳定版，建议查看是否有更新 -->
+    </dependency>
     <dependency>
       <groupId>com.thoughtworks.paranamer</groupId>
       <artifactId>paranamer</artifactId>

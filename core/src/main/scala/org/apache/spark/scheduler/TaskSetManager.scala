@@ -669,6 +669,7 @@ private[spark] class TaskSetManager(
     // Remove the scheduled or finished tasks lazily
     // 会删除forXXX map中已经完成的任务 只要有没有完成的任务就会返回true
     // forXXX map中的任务都运行完毕了就返回false
+    // TODO 针对stage中任务数极少的情况 在每个exec中都运行任务来避免负载失衡 该策略应当只使用一次
     def tasksNeedToBeScheduledFrom(pendingTaskIds: ArrayBuffer[Int]): Boolean = {
       var indexOffset = pendingTaskIds.size
       // 从后往前判断任务是否执行完毕
@@ -716,7 +717,7 @@ private[spark] class TaskSetManager(
      * 默认currentLocalityIndex = 0,
      */
     // 遍历当前任务集中 所有任务的数据本地性等级情况，请注意!!!
-    // 当任数据本地性等级还没有降到最低,就进入while循环,如果降到最低了,那就没有延迟调度的必要了,因为不能再降级了
+    // 当前数据本地性等级还没有降到最低,就进入while循环,如果降到最低了,那就没有延迟调度的必要了,因为不能再降级了
     while (currentLocalityIndex < myLocalityLevels.length - 1) {
       // 根据最高的数据本地性等级来获取任务
       // 也就是说，优先执行数据本地性高的任务
@@ -1246,9 +1247,11 @@ private[spark] class TaskSetManager(
       // bound based on that.
       logDebug("Task length threshold for speculation: " + threshold)
       for (tid <- runningTasksSet) {
+        // 检查任务是否满足推测执行的条件
         var speculated = checkAndSubmitSpeculatableTask(tid, time, threshold)
         if (!speculated && executorDecommissionKillInterval.isDefined) {
           val taskInfo = taskInfos(tid)
+
           val decomState = sched.getExecutorDecommissionState(taskInfo.executorId)
           if (decomState.isDefined) {
             // Check if this task might finish after this executor is decommissioned.

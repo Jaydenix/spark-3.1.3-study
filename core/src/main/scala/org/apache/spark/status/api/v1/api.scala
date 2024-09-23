@@ -315,15 +315,37 @@ class TaskMetrics private[spark](
     val inputMetrics: InputMetrics,
     val outputMetrics: OutputMetrics,
     val shuffleReadMetrics: ShuffleReadMetrics,
-    val shuffleWriteMetrics: ShuffleWriteMetrics)
+    val shuffleWriteMetrics: ShuffleWriteMetrics) {
+
+  override def toString = s"TaskMetrics\n(executorDeserializeTime=$executorDeserializeTime, " +
+    s"executorDeserializeCpuTime=$executorDeserializeCpuTime, " +
+    s"executorRunTime=$executorRunTime,\n" +
+    s"executorCpuTime=$executorCpuTime,\n" +
+    s"resultSize=$resultSize,\n" +
+    s"jvmGcTime=$jvmGcTime,\n" +
+    s"resultSerializationTime=$resultSerializationTime,\n" +
+    s"memoryBytesSpilled=$memoryBytesSpilled,\n" +
+    s"diskBytesSpilled=$diskBytesSpilled,\n" +
+    s"peakExecutionMemory=$peakExecutionMemory,\n" +
+    s"inputMetrics=$inputMetrics,\n" +
+    s"outputMetrics=$outputMetrics,\n" +
+    s"shuffleReadMetrics=$shuffleReadMetrics,\n" +
+    s"shuffleWriteMetrics=$shuffleWriteMetrics\n)"
+}
 
 class InputMetrics private[spark](
     val bytesRead: Long,
-    val recordsRead: Long)
+    val recordsRead: Long) {
+
+
+  override def toString = s"InputMetrics(bytesRead=$bytesRead, recordsRead=$recordsRead)"
+}
 
 class OutputMetrics private[spark](
     val bytesWritten: Long,
-    val recordsWritten: Long)
+    val recordsWritten: Long) {
+  override def toString = s"OutputMetrics(bytesWritten=$bytesWritten, recordsWritten=$recordsWritten)"
+}
 
 class ShuffleReadMetrics private[spark](
     val remoteBlocksFetched: Long,
@@ -332,12 +354,28 @@ class ShuffleReadMetrics private[spark](
     val remoteBytesRead: Long,
     val remoteBytesReadToDisk: Long,
     val localBytesRead: Long,
-    val recordsRead: Long)
+    val recordsRead: Long) {
+
+  override def toString = s"ShuffleReadMetrics(" +
+    s"remoteBlocksFetched=$remoteBlocksFetched," +
+    s"localBlocksFetched=$localBlocksFetched, " +
+    s"fetchWaitTime=$fetchWaitTime, " +
+    s"remoteBytesRead=$remoteBytesRead, " +
+    s"remoteBytesReadToDisk=$remoteBytesReadToDisk, " +
+    s"localBytesRead=$localBytesRead, " +
+    s"recordsRead=$recordsRead)"
+}
 
 class ShuffleWriteMetrics private[spark](
     val bytesWritten: Long,
     val writeTime: Long,
-    val recordsWritten: Long)
+    val recordsWritten: Long) {
+
+  override def toString = s"ShuffleWriteMetrics(" +
+    s"bytesWritten=$bytesWritten, " +
+    s"writeTime=$writeTime, " +
+    s"recordsWritten=$recordsWritten)"
+}
 
 class TaskMetricDistributions private[spark](
     val quantiles: IndexedSeq[Double],
