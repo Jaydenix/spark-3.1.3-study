@@ -531,8 +531,8 @@ private[spark] class TaskSchedulerImpl(
     }
   }
 
-  private var needWait = true
-  private var waitTimeStart = 0L
+  // private var needWait = true
+  // private var waitTimeStart = 0L
 
   /**
    * Called by cluster manager to offer resources on workers. We respond by asking our active task
@@ -708,8 +708,7 @@ private[spark] class TaskSchedulerImpl(
           // 反之跳出循环,以下一等级调度任务
           do {
             logInfo(s"#################################以${currentMaxLocality}等级调度任务#####################################")
-            // TODO adapt for cluster mode
-            // needWait是一个标识 所有应用只会等待一次
+            /*// needWait是一个标识 所有应用只会等待一次
             if (conf.get("spark.exec.wait", "false").toBoolean && needWait &&
               // 如果当前调度的任务集中任务的数量 比
               // [集群中可用的线程数(executorIdToHost.size * conf.get("spark.executor.cores","1").toInt)还少]/现将这个值改成executor的数目
@@ -725,7 +724,7 @@ private[spark] class TaskSchedulerImpl(
                 needWait = false
                 logInfo(s"=====等待exec启动${clock.getTimeMillis() - waitTimeStart}ms,当前应用无需再等待=====")
               }
-            }
+            }*/
             // 获取已完成任务的指标
             /*// 输出已经完成任务的指标信息
             for ((taskId, taskInfo) <- taskSet.taskInfos) {
