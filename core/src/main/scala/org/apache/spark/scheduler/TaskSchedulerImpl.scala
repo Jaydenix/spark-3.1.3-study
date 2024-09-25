@@ -745,6 +745,8 @@ private[spark] class TaskSchedulerImpl(
                 logInfo(s"Task $taskId is still running or not finished yet.")
               }
             }*/
+            // exec数目或许可以通过下面的方法获得
+            // sc.executorAllocationManager.get.executorMonitor.executorCount
 
             // 真正开始调度任务集中的单个任务集，返回值为(调度是否被拒绝 , 任务集中最小的数据本地性等级)
             // 关键点minLocality，决定了是否退出循环

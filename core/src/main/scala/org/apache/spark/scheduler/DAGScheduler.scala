@@ -3060,7 +3060,7 @@ private[scheduler] class DAGSchedulerEventProcessLoop(dagScheduler: DAGScheduler
 
     case GettingResultEvent(taskInfo) =>
       dagScheduler.handleGetTaskResult(taskInfo)
-      // 处理已经完成的任务 更新任务的metrics信息等
+      // 处理已经完成的任务 更新任务和executor的metrics信息等
     case completion: CompletionEvent =>
       dagScheduler.handleTaskCompletion(completion)
 
