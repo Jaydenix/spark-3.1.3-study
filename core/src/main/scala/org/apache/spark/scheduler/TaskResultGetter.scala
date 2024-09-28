@@ -119,7 +119,7 @@ private[spark] class TaskResultGetter(sparkEnv: SparkEnv, scheduler: TaskSchedul
               a
             }
           }
-
+          // 任务的metrics信息和exec的各类指标都连同任务的结果封装至result中
           scheduler.handleSuccessfulTask(taskSetManager, tid, result)
           // 任务的metrics是拿不到的 但是更新信息可以获取
           /*val task = taskSetManager.tasks(taskSetManager.taskInfos(tid).index)
