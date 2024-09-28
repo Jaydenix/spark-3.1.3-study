@@ -57,4 +57,6 @@ class ShuffleWriteMetrics private[spark] () extends ShuffleWriteMetricsReporter 
   private[spark] override def decRecordsWritten(v: Long): Unit = {
     _recordsWritten.setValue(recordsWritten - v)
   }
+
+  override def toString = s"ShuffleWriteMetrics(bytesWritten=$bytesWritten, recordsWritten=$recordsWritten, writeTime=$writeTime)"
 }

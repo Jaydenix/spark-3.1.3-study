@@ -121,6 +121,17 @@ private[spark] class TaskResultGetter(sparkEnv: SparkEnv, scheduler: TaskSchedul
           }
 
           scheduler.handleSuccessfulTask(taskSetManager, tid, result)
+          // 任务的metrics是拿不到的 但是更新信息可以获取
+          /*val task = taskSetManager.tasks(taskSetManager.taskInfos(tid).index)
+          logInfo(s"#####tid=${tid}, taskDuration=${taskSetManager.taskInfos(tid).duration}, taskMetrics = ${task.metrics} #####")
+          taskSetManager.taskInfos(tid).accumulables.foreach { accInfo =>
+            val name = accInfo.name.getOrElse("Unnamed")
+            // update表示该任务的在当前指标下的值
+            val update = accInfo.update.getOrElse("No Update")
+            // value表示当前指标下所有任务的累加值
+            // val value = accInfo.value.getOrElse("No Value")
+            logInfo(s"Metric: $name, Update: $update")
+          }*/
         } catch {
           case cnf: ClassNotFoundException =>
             val loader = Thread.currentThread.getContextClassLoader

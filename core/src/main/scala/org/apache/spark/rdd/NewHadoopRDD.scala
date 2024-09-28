@@ -334,14 +334,14 @@ class NewHadoopRDD[K, V](
    * Custom modifications by jaken
    * 获得hadoopRDD分区的位置和大小
    */
-  override protected def getPreferredLocationsAndSizes(hsplit: Partition): (Seq[String], Seq[Long]) = {
+  override protected def getPreferredLocationsAndSizes(hsplit: Partition): (Seq[String], Seq[Long], Long) = {
     val split = hsplit.asInstanceOf[NewHadoopPartition].serializableHadoopSplit.value
     val locs = HadoopRDD.convertSplitLocationInfo(split.getLocationInfo)
     // 打印分片的位置、长度信息
     // logInfo(s"#####Partition_id =${hsplit.index},locs= ${locs},partitionLength=${split.getLength},split.getLocations=${split.getLocations.mkString("Array(", ", ", ")")}#####")
     val partitionLength=split.getLength
     // 创建和locs长度一样的数组 每个数组都用分区大小来填充
-    (locs.getOrElse(split.getLocations.filter(_ != "localhost")),Seq.fill(locs.map(_.size).getOrElse(0))(partitionLength))
+    (locs.getOrElse(split.getLocations.filter(_ != "localhost")),Seq.fill(locs.map(_.size).getOrElse(0))(partitionLength),partitionLength)
   }
 
   /**

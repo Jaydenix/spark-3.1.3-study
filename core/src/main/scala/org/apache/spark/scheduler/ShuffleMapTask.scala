@@ -62,7 +62,7 @@ private[spark] class ShuffleMapTask(
                                      appAttemptId: Option[String] = None,
                                      isBarrier: Boolean = false,
                                      // 添加allLocsAndSize变量 默认为Nil 注意放在参数的末尾位置 这样可以避免修改大量代码
-                                     @transient private var allLocsAndSize:IndexedSeq[(Seq[TaskLocation], Seq[Long])]=IndexedSeq.empty,
+                                     @transient private var locsSizesTotalSize:IndexedSeq[(Seq[TaskLocation], Seq[Long], Long)]=IndexedSeq.empty,
                                      // 添加allSize变量，表示任务的数据总大小
                                      allSize: Long = 0
                                    )
@@ -118,15 +118,15 @@ private[spark] class ShuffleMapTask(
    * Custom modifications by jaken
    * 继承Task父类的preferredSizes属性
    */
-  override def preferredLocsAndSizes: IndexedSeq[(Seq[TaskLocation], Seq[Long])] = allLocsAndSize
+  override def preferredLocsSizesTotalSize: IndexedSeq[(Seq[TaskLocation], Seq[Long], Long)] = locsSizesTotalSize
 
   /**
    * Custom modifications by jaken
    * 加入任务总数据大小属性
    */
-  override def taskSize: Long = allSize
+  override def readSize: Long = allSize
 
-  override def toString: String = s"ShuffleMapTask(appId=$appId,jobId=$jobId,stageId=$stageId," +
-    s"partitionId=$partitionId,preferredLocations=${preferredLocations},allSize = ${allSize},preferredLocsAndSizes=${preferredLocsAndSizes}" +
+  override def toString: String = s"ShuffleMapTask(stageId=$stageId," +
+    s"partitionId=$partitionId,allSize = ${allSize},locsSizesTotalSize=${locsSizesTotalSize},preferredLocations=${preferredLocations}" +
     s" )"
 }

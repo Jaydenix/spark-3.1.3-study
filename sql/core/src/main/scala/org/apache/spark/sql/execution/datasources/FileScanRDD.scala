@@ -212,4 +212,15 @@ class FileScanRDD(
   override protected def getPreferredLocations(split: RDDPartition): Seq[String] = {
     split.asInstanceOf[FilePartition].preferredLocations()
   }
+
+  /**
+   * Custom modifications by jaken
+   * 获得文件的数据 内部默认会取前三大的文件
+   * 数据本地性和对应的数据量 是前三大文件的
+   * 最后返回的是所有文件的总大小
+   */
+  override protected def getPreferredLocationsAndSizes(split: RDDPartition): (Seq[String],Seq[Long],Long) = {
+    val filePartition = split.asInstanceOf[FilePartition]
+    filePartition.preferredLocationsAndSizes()
+  }
 }

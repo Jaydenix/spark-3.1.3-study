@@ -266,9 +266,18 @@ class TaskMetrics private[spark] () extends Serializable {
     internalAccums.filter(a => !a.isZero || a == _resultSize)
   }
 
+/*
   override def toString = s"TaskMetrics[nameToAccums](${nameToAccums.map { case (name, value) =>
     f"  $name%-40s: $value"
   }.mkString("\n")})"
+*/
+
+  override def toString = s"TaskMetrics(inputMetrics=$inputMetrics, outputMetrics=$outputMetrics, shuffleReadMetrics=$shuffleReadMetrics, " +
+    s"shuffleWriteMetrics=$shuffleWriteMetrics, executorDeserializeTime=$executorDeserializeTime, " +
+    s"executorDeserializeCpuTime=$executorDeserializeCpuTime, executorRunTime=$executorRunTime, " +
+    s"executorCpuTime=$executorCpuTime, resultSize=$resultSize, jvmGCTime=$jvmGCTime, " +
+    s"resultSerializationTime=$resultSerializationTime, memoryBytesSpilled=$memoryBytesSpilled, " +
+    s"diskBytesSpilled=$diskBytesSpilled, peakExecutionMemory=$peakExecutionMemory)"
 }
 
 

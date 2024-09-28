@@ -380,7 +380,7 @@ class HadoopRDD[K, V](
       case _ => None
     }
     // 打印分区的所在位置信息
-    logInfo(s"#####Partition_id =${split.index},locs= ${locs},partitionLength=${hsplit.getLength},split.getLocations=${hsplit.getLocations.mkString("Array(", ", ", ")")}#####")
+    // logInfo(s"#####Partition_id =${split.index},locs= ${locs},partitionLength=${hsplit.getLength},split.getLocations=${hsplit.getLocations.mkString("Array(", ", ", ")")}#####")
     locs.getOrElse(hsplit.getLocations.filter(_ != "localhost"))
   }
 
@@ -389,7 +389,7 @@ class HadoopRDD[K, V](
    * Custom modifications by jaken
    * 获得hadoopRDD分区的位置和大小
    */
-  override protected def getPreferredLocationsAndSizes(split: Partition): (Seq[String], Seq[Long]) = {
+  override protected def getPreferredLocationsAndSizes(split: Partition): (Seq[String], Seq[Long], Long) = {
     // hsplit就是hadoop的分片对象,内部一定包含了分片的长度信息
     val hsplit = split.asInstanceOf[HadoopPartition].inputSplit.value
     val locs = hsplit match {
@@ -397,11 +397,11 @@ class HadoopRDD[K, V](
         HadoopRDD.convertSplitLocationInfo(lsplit.getLocationInfo)
       case _ => None
     }
-    val partitionLength=hsplit.getLength
+    val partitionLength = hsplit.getLength
     // 打印分区的所在位置信息
     // logInfo(s"#####Partition_id =${split.index},locs= ${locs},partitionLength=${partitionLength},split.getLocations=${hsplit.getLocations.mkString("Array(", ", ", ")")}#####")
     // 创建和locs长度一样的数组 每个数组都用分区大小来填充
-    (locs.getOrElse(hsplit.getLocations.filter(_ != "localhost")),Seq.fill(locs.map(_.size).getOrElse(0))(partitionLength))
+    (locs.getOrElse(hsplit.getLocations.filter(_ != "localhost")), Seq.fill(locs.map(_.size).getOrElse(0))(partitionLength), partitionLength)
   }
 
   override def checkpoint(): Unit = {

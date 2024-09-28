@@ -145,7 +145,7 @@ abstract class RDD[T: ClassTag](
    * Custom modifications by jaken
    * 获得RDD分区的位置和大小
    */
-  protected def getPreferredLocationsAndSizes(split: Partition): (Seq[String],Seq[Long]) = (Nil,Nil)
+  protected def getPreferredLocationsAndSizes(split: Partition): (Seq[String],Seq[Long],Long) = (Nil,Nil,0)
 
   /** Optionally overridden by subclasses to specify how they are partitioned. */
   @transient val partitioner: Option[Partitioner] = None
@@ -336,7 +336,7 @@ abstract class RDD[T: ClassTag](
    * Custom modifications by jaken
    * 返回的是partition的位置和大小
    */
-  final def preferredLocationsAndSizes(split: Partition): (Seq[String],Seq[Long]) = {
+  final def preferredLocationsAndSizes(split: Partition): (Seq[String],Seq[Long], Long) = {
     checkpointRDD.map(_.getPreferredLocationsAndSizes(split)).getOrElse {
       getPreferredLocationsAndSizes(split)
     }

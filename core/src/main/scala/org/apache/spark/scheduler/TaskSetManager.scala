@@ -239,23 +239,23 @@ private[spark] class TaskSetManager(
     pendingTaskSetToAddTo.forExecutor.foreach {
       case (executorName, taskIds) => {
         // 加个负号表示降序
-        pendingTaskSetToAddTo.forExecutor(executorName) = taskIds.sortBy(index => -tasks(index).taskSize)
+        pendingTaskSetToAddTo.forExecutor(executorName) = taskIds.sortBy(index => -tasks(index).readSize)
       }
     }
     pendingTaskSetToAddTo.forHost.foreach{
       case (hostName,taskIds) => {
         // 加个负号表示降序
-        pendingTaskSetToAddTo.forHost(hostName)=taskIds.sortBy(index => -tasks(index).taskSize)
+        pendingTaskSetToAddTo.forHost(hostName)=taskIds.sortBy(index => -tasks(index).readSize)
       }
     }
     pendingTaskSetToAddTo.forRack.foreach {
       case (rackName, taskIds) => {
         // 加个负号表示降序
-        pendingTaskSetToAddTo.forRack(rackName) = taskIds.sortBy(index => -tasks(index).taskSize)
+        pendingTaskSetToAddTo.forRack(rackName) = taskIds.sortBy(index => -tasks(index).readSize)
       }
     }
-    pendingTaskSetToAddTo.noPrefs = pendingTaskSetToAddTo.noPrefs.sortBy(index => -tasks(index).taskSize)
-    pendingTaskSetToAddTo.noPrefs = pendingTaskSetToAddTo.all.sortBy(index => -tasks(index).taskSize)
+    pendingTaskSetToAddTo.noPrefs = pendingTaskSetToAddTo.noPrefs.sortBy(index => -tasks(index).readSize)
+    pendingTaskSetToAddTo.noPrefs = pendingTaskSetToAddTo.all.sortBy(index => -tasks(index).readSize)
 
     logInfo(s"============降序排序后============")
     logInfo(s"前50个pendingTasks.forExecutor=\n${pendingTasks.forExecutor.take(50).mkString("\n")}\n" +

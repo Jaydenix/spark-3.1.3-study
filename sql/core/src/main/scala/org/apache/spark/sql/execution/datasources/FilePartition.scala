@@ -46,14 +46,39 @@ case class FilePartition(index: Int, files: Array[PartitionedFile])
       case (host, numBytes) => host
     }.toArray
   }
+
+  def preferredLocationsAndSizes(): (Seq[String], Seq[Long], Long) = {
+    // Computes total number of bytes can be retrieved from each host.
+    val hostToNumBytes = mutable.HashMap.empty[String, Long]
+    files.foreach { file =>
+      file.locations.filter(_ != "localhost").foreach { host =>
+        hostToNumBytes(host) = hostToNumBytes.getOrElse(host, 0L) + file.length
+      }
+    }
+    // 按字节数对主机进行降序排序，取前3个主机
+    val hosts = hostToNumBytes.toSeq
+      .sortBy { case (_, numBytes) => numBytes }
+      .reverse
+
+    val topHosts = hosts.take(3)
+    // 将结果转换为两个数组：主机名数组和对应的字节数数组
+    val hostArray = topHosts.map(_._1)
+    val sizeArray = topHosts.map(_._2)
+    var allSize = 0
+    for (elem <- hosts) {
+      allSize += elem._2
+    }
+    // 返回主机名数组和字节数数组
+    (hostArray, sizeArray, allSize)
+  }
 }
 
 object FilePartition extends Logging {
 
   def getFilePartitions(
-      sparkSession: SparkSession,
-      partitionedFiles: Seq[PartitionedFile],
-      maxSplitBytes: Long): Seq[FilePartition] = {
+                         sparkSession: SparkSession,
+                         partitionedFiles: Seq[PartitionedFile],
+                         maxSplitBytes: Long): Seq[FilePartition] = {
     val partitions = new ArrayBuffer[FilePartition]
     val currentFiles = new ArrayBuffer[PartitionedFile]
     var currentSize = 0L
@@ -84,8 +109,8 @@ object FilePartition extends Logging {
   }
 
   def maxSplitBytes(
-      sparkSession: SparkSession,
-      selectedPartitions: Seq[PartitionDirectory]): Long = {
+                     sparkSession: SparkSession,
+                     selectedPartitions: Seq[PartitionDirectory]): Long = {
     val defaultMaxSplitBytes = sparkSession.sessionState.conf.filesMaxPartitionBytes
     val openCostInBytes = sparkSession.sessionState.conf.filesOpenCostInBytes
     val minPartitionNum = sparkSession.sessionState.conf.filesMinPartitionNum

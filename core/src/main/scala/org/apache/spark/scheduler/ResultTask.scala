@@ -65,7 +65,7 @@ private[spark] class ResultTask[T, U](
                                        appAttemptId: Option[String] = None,
                                        isBarrier: Boolean = false,
                                        // 添加sizes变量 默认为Nil 注意放在参数的末尾位置 这样可以避免修改大量代码
-                                       allLocsAndSize: IndexedSeq[(Seq[TaskLocation], Seq[Long])] = IndexedSeq.empty,
+                                       locsSizesTotalSize: IndexedSeq[(Seq[TaskLocation], Seq[Long], Long)] = IndexedSeq.empty,
                                        // 添加allSize变量，表示任务的数据总大小
                                        allSize: Long = 0
                                      )
@@ -81,14 +81,14 @@ private[spark] class ResultTask[T, U](
    * Custom modifications by jaken
    * 继承Task父类的preferredSizes属性,该属性在taskSetManager中 将任务放置在相应队列时需要使用
    */
-  override def preferredLocsAndSizes: IndexedSeq[(Seq[TaskLocation], Seq[Long])] = allLocsAndSize
+  override def preferredLocsSizesTotalSize: IndexedSeq[(Seq[TaskLocation], Seq[Long], Long)] = locsSizesTotalSize
 
 
   /**
    * Custom modifications by jaken
    * 加入任务总数据大小属性
    */
-  override def taskSize: Long = allSize
+  override def readSize: Long = allSize
 
   override def runTask(context: TaskContext): U = {
     // Deserialize the RDD and the func using the broadcast variables.
@@ -113,7 +113,7 @@ private[spark] class ResultTask[T, U](
 
   // override def toString: String = "ResultTask(" + stageId + ", " + partitionId + ")"
 
-  override def toString: String = s"ResultTask(appId=$appId,jobId=$jobId,stageId=$stageId," +
-    s"partitionId=$partitionId,preferredLocations=${preferredLocations},allSize = ${allSize},preferredLocsAndSizes=${preferredLocsAndSizes}" +
+  override def toString: String = s"ResultTask(stageId=$stageId," +
+    s"partitionId=$partitionId,allSize = ${allSize},locsSizesTotalSize=${locsSizesTotalSize},preferredLocations=${preferredLocations}" +
     s" )"
 }

@@ -410,7 +410,9 @@ private[spark] class DAGScheduler(
 
   /**
    * Custom modifications by jaken
-   * 获得缓存的位置和大小
+   * 获得缓存的位置和大小：首先会查看cacheLocsAndSizes中有没有记录[这不代表rdd被缓存了,而是当前stage有没有访问过该RDD]
+   * 如果没有记录过,就会继续判断rdd.getStorageLevel == StorageLevel.NONE
+   * true：该RDD被缓存了,返回缓存的位置和大小 false：将RDD记录在cacheLocsAndSizes中,值为空
    */
   private[scheduler]
   def getCacheLocsAndSizes(rdd: RDD[_]): IndexedSeq[(Seq[TaskLocation], Seq[Long])] = cacheLocsAndSizes.synchronized {
@@ -427,12 +429,13 @@ private[spark] class DAGScheduler(
     ) {
       logInfo(s"#####当前RDD=${rdd.id}不在cacheLocsAndSizes.keys=${cacheLocsAndSizes.keySet.mkString("[", ",", "]")}中#####")
       // Note: if the storage level is NONE, we don't need to get locations from block manager.
+      // rdd.getStorageLevel == StorageLevel.NONE可以判断RDD是否被缓存
       val locsAndSizes: IndexedSeq[(Seq[TaskLocation], Seq[Long])] = if (rdd.getStorageLevel == StorageLevel.NONE) {
         IndexedSeq.fill(rdd.partitions.length)((Nil, Nil))
       } else {
         // 获取当前rdd的所有partition对应的blockIds
         val blockIds = rdd.partitions.indices.map(index => RDDBlockId(rdd.id, index)).toArray[BlockId]
-        logInfo(s"#####blockIds=${blockIds.head}, ... , ${blockIds.last} #####")
+        logInfo(s"#####当前RDD被缓存, blockIds=${blockIds.head}, ... , ${blockIds.last} #####")
         /*     blockManagerMaster.getLocations(blockIds).map { bms =>
                   bms.map(bm => TaskLocation(bm.host, bm.executorId))
                 }*/
@@ -1535,12 +1538,14 @@ private[spark] class DAGScheduler(
     val tracker = SparkEnv.get.mapOutputTracker.asInstanceOf[MapOutputTrackerMaster]
     //    val dep = rdd.dependencies.head.asInstanceOf[ShuffleDependency[K, V, C]]
     logInfo(s"##### tracker.shuffleStatuses.keys = ${tracker.shuffleStatuses.keys} #####")
-    logInfo(s"##### Array[MapStatus].head = \n${tracker.shuffleStatuses.values.map{
-      status => status.mapStatuses.head
-    }.mkString(" | ")
+    logInfo(s"##### Array[MapStatus].head = \n${
+      tracker.shuffleStatuses.values.map {
+        status => status.mapStatuses.head
+      }.mkString(" | ")
     } #####")
     val narrowAncestors = stage.rdd.getNarrowAncestors
-    logInfo(s"#####getNarrowAncestors=\n${narrowAncestors},rddId=${narrowAncestors.map(_.id)} #####")
+    val cachedRDD = narrowAncestors.filter(_.getStorageLevel != StorageLevel.NONE)
+    logInfo(s"#####getNarrowAncestors=\n${narrowAncestors},rddId=${narrowAncestors.map(_.id)},cachedRDD=${cachedRDD} #####")
     // 初始化三个变量为false
     fromCached = false
     fromHDFS = false
@@ -1550,7 +1555,9 @@ private[spark] class DAGScheduler(
      * Custom modifications by jaken
      * 根据窄依赖的关系 过滤出shuffleRDD和hadoopRDD
      */
+      //TODO 考虑ShuffledRowRDD
     val shuffledRDDs = narrowAncestors.filter(_.isInstanceOf[ShuffledRDD[_, _, _]])
+
     if (shuffledRDDs.nonEmpty) fromShuffle = true
     logInfo(s"#####shuffledRDDs=${shuffledRDDs},fromShuffle=${fromShuffle} #####")
 
@@ -1566,24 +1573,25 @@ private[spark] class DAGScheduler(
       bms.map(bm => TaskLocation(bm.host, bm.executorId))
     * */
 
-    // 可能存在一个stage由多个shuffledRDD的结果作为输入,那么使用rdd.id最大的那个shuffledRDD作为当前stage的输入shuffledRDD
-    // shuffledRDD.id越大 表明当前rdd出现的越晚 stage需要最新的shuffle作为输入 老的shuffle输入可能已经作为block保存在内存中了
+
     /**
      * Custom modifications by jaken
-     * 找到输入的shuffleRDD 缓存的shuffleRDD 输入的hadoopRDD
+     * 可能存在一个stage由多个shuffledRDD的结果作为输入,那么使用rdd.id最大的那个shuffledRDD作为当前stage的输入shuffledRDD
+     * shuffledRDD.id越大 表明当前rdd出现的越晚 stage需要最新的shuffle作为输入 老的shuffle输入可能已经作为block保存在内存中了
      */
     val inputShuffledRDD: Option[RDD[_]] = shuffledRDDs match {
       case Nil => None
       case rdds => Some(rdds.maxBy(_.id))
     }
-    val cachedShuffledRDD: Option[RDD[_]] = if (shuffledRDDs.size <= 1) None else shuffledRDDs match {
-      case Nil => None
-      case rdds => Some(rdds.minBy(_.id))
-    }
-    val inputHadoopRDD: Option[RDD[_]] = hadoopRDDs match {
-      case Nil => None
-      case rdds => Some(rdds.head)
-    }
+
+    /*    val cachedShuffledRDD: Option[RDD[_]] = if (shuffledRDDs.size <= 1) None else shuffledRDDs match {
+          case Nil => None
+          case rdds => Some(rdds.minBy(_.id))
+        }
+        val inputHadoopRDD: Option[RDD[_]] = hadoopRDDs match {
+          case Nil => None
+          case rdds => Some(rdds.head)
+        }*/
 
     /**
      * Custom modifications by jaken
@@ -1595,85 +1603,6 @@ private[spark] class DAGScheduler(
       case None => None
     }
     logInfo(s"#####inputShuffledRDD=${inputShuffledRDD},inputShuffleId=${inputShuffleDependency.map(_.shuffleId).getOrElse(-1)}#####")
-
-    /*
-    * 对于缓存的hadoopRDD 通过定义变量cacheHadoopRDDsize:mutable.HashMap[Int, mutable.IndexedSeq[Long]]来记录hadoopRDD是否已经被访问过了
-    * */
-    // 如果hadoopRDD第一次出现 就将其放入cacheHadoopRDDsize中 长度为stage.rdd.getNumPartitions
-    /*if (hadoopRDDs.nonEmpty && !cacheHadoopRDDsize.contains(inputHadoopRDD.get.id))
-      cacheHadoopRDDsize(inputHadoopRDD.get.id) = mutable.IndexedSeq.fill[Long](stage.rdd.getNumPartitions)(0)
-    logInfo(s"#####cacheHadoopRDDsize=\n${cacheHadoopRDDsize.mkString("\n")}#####")*/
-
-    // 得到blockmanager and master
-    /*val blockManager = SparkEnv.get.blockManager
-    val blockManagerMaster = blockManager.master
-    // blockManager.blockManagerId.host=本机的host
-    // logInfo(s"#####blockManager.blockManagerId.host=${blockManager.blockManagerId.host}#####")
-    var hadoopRDDBlockSize: Array[(Long, Long)] = Array.empty[(Long, Long)]*/
-
-    /**
-     * Custom modifications by jaken
-     * 只是打印输出看一下，没具体意义
-     * 如果当前stage有hadoopRDD作为输入，根据partition找到分区对应的blockId 然后根据blockManagerMaster找到blockStatus 从而找到块的大小
-     */
-    /*if (hadoopRDDs.nonEmpty) {
-      val hadoopRDDBlockIds: Array[BlockId] = inputHadoopRDD.get.partitions.indices.map(index => RDDBlockId(inputHadoopRDD.get.id, index)).toArray[BlockId]
-      logInfo(s"#####hadoopRDDBlockIds=${hadoopRDDBlockIds.mkString(",")}#####")
-      /*val hadoopRDDBlockSize = hadoopRDDBlockIds.map {
-        blockId =>
-          val blockStatus = blockManagerMaster.getLocationsAndStatus(blockId, blockManager.blockManagerId.host).map(_.status)
-          if (blockStatus.isDefined) (blockStatus.get.memSize, blockStatus.get.diskSize)
-          else (0, 0)
-      }*/
-      hadoopRDDBlockSize = hadoopRDDBlockIds.map { blockId =>
-        val blockStatus = blockManagerMaster.getLocationsAndStatus(blockId, blockManager.blockManagerId.host).map(_.status)
-        blockStatus.map(status => (status.memSize, status.diskSize)).getOrElse(0L, 0L)
-      }
-      logInfo(s"#####hadoopBlockSize(memSize,diskSize)=${hadoopRDDBlockSize.mkString(",")}#####")
-    }*/
-
-    /**
-     * Custom modifications by jaken
-     * 只是打印输出看一下，没具体意义
-     * 如果存在缓存的shuffleRDD 用同样的方法获得其块的大小
-     */
-    /*if (cachedShuffledRDD.isDefined) {
-      val shuffledRDDBlockIds: Array[BlockId] = cachedShuffledRDD.get.partitions.indices.map(index => RDDBlockId(cachedShuffledRDD.get.id, index)).toArray[BlockId]
-      logInfo(s"#####缓存shuffledRDDBlockIds=${shuffledRDDBlockIds.mkString(",")}#####")
-      val shuffledRDDBlockSize = shuffledRDDBlockIds.map {
-        blockId =>
-          val blockStatus = blockManagerMaster.getLocationsAndStatus(blockId, blockManager.blockManagerId.host).map(_.status)
-          if (blockStatus.isDefined) (blockStatus.get.memSize, blockStatus.get.diskSize)
-          else (0L, 0L)
-      }
-      logInfo(s"#####shuffledRDDBlockSize(memSize,diskSize)=${shuffledRDDBlockSize.mkString(",")}#####")
-    }*/
-    /*    val idToStage: Option[(Int, ShuffleMapStage)] = shuffleIdToMapStage.find(_._2 == stage)
-        // 如果当前stage不是shuffleMapStage 就定义shuffleId = -1
-        val shuffleId = idToStage match {
-          case Some((id, _)) => {
-            logInfo(s"#####当前stage是shuffleMapStage#####")
-            id
-          }
-          case None => {
-            logInfo(s"#####当前stage不是shuffleMapStage#####")
-            -1
-          }
-        }
-        logInfo(s"#####shuffleId=${shuffleId}#####")*/
-
-    /*    var shuffleDependency: ShuffleDependency[_, _, _] = null
-        if (isShuffledRDD) {
-          logInfo(s"#####当前stage的初始RDD为shuffledRDD=${startRDD},末尾RDD为${stage.rdd}#####")
-          // 根据shuffle依赖找到shuffleId
-          shuffleDependency = startRDD.asInstanceOf[ShuffledRDD[_, _, _]].dependencies.head.asInstanceOf[ShuffleDependency[_, _, _]]
-          shuffleId = shuffleDependency.shuffleId
-          logInfo(s"#####shuffledId=${shuffleId}#####")
-        } else {
-          logInfo(s"#####当前stage的初始RDD为hadoopRDD=${startRDD}#####")
-        }
-        // 如果当前startRDD.id 没有出现在cacheHadoopRDDsize中 就将其加入 长度为stage.rdd.getNumPartitions
-        if (!cacheHadoopRDDsize.contains(startRDD.id)) cacheHadoopRDDsize(startRDD.id) = mutable.IndexedSeq.fill[Long](stage.rdd.getNumPartitions)(0)*/
 
     // Use the scheduling pool, job group, description, etc. from an ActiveJob associated
     // with this Stage
@@ -1737,7 +1666,7 @@ private[spark] class DAGScheduler(
      * Custom modifications by jaken
      * 修改变量 改为taskIdToLocationsAndSizes
      */
-    val taskIdToLocationsAndSizes: Map[Int, IndexedSeq[(Seq[TaskLocation], Seq[Long])]] =
+    val taskIdToLocationsAndSizes: Map[Int, IndexedSeq[(Seq[TaskLocation], Seq[Long], Long)]] =
       try {
         stage match {
           case s: ShuffleMapStage =>
@@ -1745,32 +1674,31 @@ private[spark] class DAGScheduler(
               // 这里的rdd是stage末尾的rdd,真正计算的时候,会往前寻找父RDD,来获取父rdd的位置,对于ShuffleMapStage而言,从hdfs读取数据的是NewHadoopRDD,也可能是ShuffledRDD
               // (id, getPreferredLocs(stage.rdd, id))
               // sizes 是input的位置和结果,缓存/hadoop数据块位置/shuffle位置
-              val fromHdfsCachedShuffle: mutable.IndexedSeq[(Seq[TaskLocation], Seq[Long])] = mutable.IndexedSeq.fill(3)((Nil, Nil))
+              val fromHdfsCachedShuffle: mutable.IndexedSeq[(Seq[TaskLocation], Seq[Long], Long)] = mutable.IndexedSeq.fill(3)((Nil, Nil, 0L))
               fromCached = false
-              val (locs, sizes) = getPreferredLocsAndSizes(stage.rdd, id)
+              // 该方法返回最后出现RDD的分区位置和大小,如果有缓存的RDD分区,优先返回缓存值 否则,可能返回的是(New)HadoopRDD或shuffleRDD的值
+              val (locs, sizes, totalSize) = getPreferredLocsAndSizes(stage.rdd, id)
               // logInfo(s"#####(locs, sizes)=(${locs},${sizes})#####")
               // fromCached=true 表示当前分区被缓存了
               // 对于shuffledRDD来说,缓存的数据大小为各个上游任务对应的分区的数据之和
               // 对于hadoopRDD来说,缓存的大小就是之前的数据块的大小
               if (fromCached) {
-                logInfo(s"#####当前stage的输入包括缓存RDD,下面获取shuffleRead的输入#####")
-                fromHdfsCachedShuffle(1) = (locs, sizes)
+                // logInfo(s"#####当前stage的输入包括缓存RDD,下面获取可能的shuffleRead输入#####")
+                fromHdfsCachedShuffle(1) = (locs, sizes, totalSize)
                 // 有缓存的情况下 另一部分输入可能来自shuffle
                 if (inputShuffleDependency.isDefined) {
-                  val (shuffleLocs, shuffleSizes) = tracker.getPreferredLocationsAndSizesForShuffle(inputShuffleDependency.get, id)
+                  val (shuffleLocs, shuffleSizes, totalShuffleSize) = tracker.getPreferredLocationsAndSizesForShuffle(inputShuffleDependency.get, id)
                   val rddPrefs = shuffleLocs.toList
-                  if (rddPrefs.nonEmpty) {
-                    fromHdfsCachedShuffle(2) = (rddPrefs.map(TaskLocation(_)), shuffleSizes)
-                  }
+                  fromHdfsCachedShuffle(2) = (rddPrefs.map(TaskLocation(_)), shuffleSizes, totalShuffleSize)
                 }
               }
               // 没有缓存
               else {
                 if (fromHDFS) {
-                  fromHdfsCachedShuffle(0) = (locs, sizes)
+                  fromHdfsCachedShuffle(0) = (locs, sizes, totalSize)
                 }
                 else if (fromShuffle) {
-                  fromHdfsCachedShuffle(2) = (locs, sizes)
+                  fromHdfsCachedShuffle(2) = (locs, sizes, totalSize)
                 }
               }
               // logInfo(s"#####fromHdfsCachedShuffle=${fromHdfsCachedShuffle.mkString("\t")} #####")
@@ -1779,32 +1707,30 @@ private[spark] class DAGScheduler(
           case s: ResultStage =>
             partitionsToCompute.map { id =>
               val p = s.partitions(id)
-              val fromHdfsCachedShuffle: mutable.IndexedSeq[(Seq[TaskLocation], Seq[Long])] = mutable.IndexedSeq.fill(3)((Nil, Nil))
+              val fromHdfsCachedShuffle: mutable.IndexedSeq[(Seq[TaskLocation], Seq[Long], Long)] = mutable.IndexedSeq.fill(3)((Nil, Nil, 0L))
               fromCached = false
               // 这里的rdd是stage末尾的rdd,真正计算的时候,会往前寻找父RDD,来获取父rdd的位置,对于ResultStage而言,是ShuffledRDD
               // (id, getPreferredLocs(stage.rdd, p))
-              val (locs, sizes) = getPreferredLocsAndSizes(stage.rdd, p)
+              val (locs, sizes, totalSize) = getPreferredLocsAndSizes(stage.rdd, p)
               // fromCached=true 表示当前分区被缓存了
               // 对于shuffledRDD来说,缓存的数据大小为各个上游任务对应的分区的数据之和
               // 对于hadoopRDD来说,缓存的大小就是之前的数据块的大小
               if (fromCached) {
-                fromHdfsCachedShuffle(1) = (locs, sizes)
+                fromHdfsCachedShuffle(1) = (locs, sizes, totalSize)
                 // 有缓存的情况下 另一部分输入可能来自shuffle
                 if (inputShuffleDependency.isDefined) {
-                  val (shuffleLocs, shuffleSizes) = tracker.getPreferredLocationsAndSizesForShuffle(inputShuffleDependency.get, id)
+                  val (shuffleLocs, shuffleSizes, totalShuffleSize) = tracker.getPreferredLocationsAndSizesForShuffle(inputShuffleDependency.get, id)
                   val rddPrefs = shuffleLocs.toList
-                  if (rddPrefs.nonEmpty) {
-                    fromHdfsCachedShuffle(2) = (rddPrefs.map(TaskLocation(_)), shuffleSizes)
-                  }
+                  fromHdfsCachedShuffle(2) = (rddPrefs.map(TaskLocation(_)), shuffleSizes, totalShuffleSize)
                 }
               }
               // 没有缓存
               else {
                 if (fromHDFS) {
-                  fromHdfsCachedShuffle(0) = (locs, sizes)
+                  fromHdfsCachedShuffle(0) = (locs, sizes, totalSize)
                 }
                 else if (fromShuffle) {
-                  fromHdfsCachedShuffle(2) = (locs, sizes)
+                  fromHdfsCachedShuffle(2) = (locs, sizes, totalSize)
                 }
               }
               // logInfo(s"#####fromHdfsCachedShuffle=${fromHdfsCachedShuffle.mkString("\t")} #####")
@@ -1821,7 +1747,7 @@ private[spark] class DAGScheduler(
           runningStages -= stage
           return
       }
-    logInfo(s"=====调用getPreferredLocs(),计算出当前RDD=${stage.rdd}的<${partitionsToCompute.size}>个任务(分区)的数据位置=====\n")
+    logInfo(s"=====计算出当前RDD=${stage.rdd}的<${partitionsToCompute.size}>个任务(分区)的数据位置=====\n")
     logInfo(s"#####任务的数据位置为:taskIdToLocationsAndSizes.head=${taskIdToLocationsAndSizes.head}, ... ,taskIdToLocationsAndSizes.last=${taskIdToLocationsAndSizes.last}#####")
     // 重新封装一下
     // val taskIdToLocations: Map[Int, Seq[TaskLocation]]
@@ -1907,24 +1833,14 @@ private[spark] class DAGScheduler(
           partitionsToCompute.map { id =>
             // 得到任务的数据本地性，一个任务就对应一个分区
             val locs = taskIdToLocationsAndSizes(id)(nativeIndex)._1
-            val allLocsAndSize = taskIdToLocationsAndSizes(id)
-            var allSize: Long = 0
-            for (i <- allLocsAndSize.indices) {
-              if (i == 0 && allLocsAndSize(i)._2.nonEmpty) allSize += allLocsAndSize(i)._2.head
-              else {
-                if (allLocsAndSize(i)._2.nonEmpty) {
-                  for (size <- allLocsAndSize(i)._2) {
-                    allSize += size
-                  }
-                }
-              }
-            }
-            // val sizes = taskIdToLocationsAndSizes(id)._2
+            val locsSizesAllSize = taskIdToLocationsAndSizes(id)
+            var allSize = 0L
+            locsSizesAllSize.foreach { case (_, _, size) => allSize += size }
             val part = partitions(id)
             stage.pendingPartitions += id
             new ShuffleMapTask(stage.id, stage.latestInfo.attemptNumber,
               taskBinary, part, locs, properties, serializedTaskMetrics, Option(jobId),
-              Option(sc.applicationId), sc.applicationAttemptId, stage.rdd.isBarrier(), allLocsAndSize, allSize)
+              Option(sc.applicationId), sc.applicationAttemptId, stage.rdd.isBarrier(), locsSizesAllSize, allSize)
           }
 
         case stage: ResultStage =>
@@ -1932,23 +1848,13 @@ private[spark] class DAGScheduler(
             val p: Int = stage.partitions(id)
             val part = partitions(p)
             val locs = taskIdToLocationsAndSizes(id)(nativeIndex)._1
-            val allLocsAndSize = taskIdToLocationsAndSizes(id)
-            // val sizes = taskIdToLocationsAndSizes(id)._2
-            var allSize: Long = 0
-            for (i <- allLocsAndSize.indices) {
-              if (i == 0 && allLocsAndSize(i)._2.nonEmpty) allSize += allLocsAndSize(i)._2.head
-              else {
-                if (allLocsAndSize(i)._2.nonEmpty) {
-                  for (size <- allLocsAndSize(i)._2) {
-                    allSize += size
-                  }
-                }
-              }
-            }
+            val locsSizesAllSize = taskIdToLocationsAndSizes(id)
+            var allSize = 0L
+            locsSizesAllSize.foreach { case (_, _, size) => allSize += size }
             new ResultTask(stage.id, stage.latestInfo.attemptNumber,
               taskBinary, part, locs, id, properties, serializedTaskMetrics,
               Option(jobId), Option(sc.applicationId), sc.applicationAttemptId,
-              stage.rdd.isBarrier(), allLocsAndSize, allSize)
+              stage.rdd.isBarrier(), locsSizesAllSize, allSize)
           }
       }
     } catch {
@@ -2030,12 +1936,12 @@ private[spark] class DAGScheduler(
             e)
       }
     }
-   /* logInfo(s"##### task partitionId: ${task.partitionId} ##### ")
-    event.taskInfo.accumulables.foreach { accInfo =>
-      val name = accInfo.name.getOrElse("Unnamed")
-      val value = accInfo.value.getOrElse("No Value")
-      logInfo(s"Accumulator: $name, Value: $value")
-    }*/
+    /* logInfo(s"##### task partitionId: ${task.partitionId} ##### ")
+     event.taskInfo.accumulables.foreach { accInfo =>
+       val name = accInfo.name.getOrElse("Unnamed")
+       val value = accInfo.value.getOrElse("No Value")
+       logInfo(s"Accumulator: $name, Value: $value")
+     }*/
   }
 
   private def postTaskEnd(event: CompletionEvent): Unit = {
@@ -2849,7 +2755,7 @@ private[spark] class DAGScheduler(
    * partitionSize
    */
   private[spark]
-  def getPreferredLocsAndSizes(rdd: RDD[_], partition: Int): (Seq[TaskLocation], Seq[Long]) = {
+  def getPreferredLocsAndSizes(rdd: RDD[_], partition: Int): (Seq[TaskLocation], Seq[Long], Long) = {
     getPreferredLocsAndSizesInternal(rdd, partition, new HashSet)
   }
 
@@ -2911,7 +2817,7 @@ private[spark] class DAGScheduler(
   private def getPreferredLocsAndSizesInternal(
                                                 rdd: RDD[_],
                                                 partition: Int,
-                                                visited: HashSet[(RDD[_], Int)]): (Seq[TaskLocation], Seq[Long]) = {
+                                                visited: HashSet[(RDD[_], Int)]): (Seq[TaskLocation], Seq[Long], Long) = {
     // logInfo(s"=====递归获取任务运行的位置=====")
     // If the partition has already been visited, no need to re-visit.
     // This avoids exponential path exploration.  SPARK-695
@@ -2919,7 +2825,7 @@ private[spark] class DAGScheduler(
     if (!visited.add((rdd, partition))) {
       // Nil has already been returned for previously visited partitions.
       // logInfo(s"=====<获取partition:${partition}的偏好位置>当前rdd:${rdd}中的partition:${partition}已经被访问过了,返回Nil=====")
-      return (Nil, Nil)
+      return (Nil, Nil, 0)
     }
     // If the partition is cached, return the cache locations
     // 如果rdd被缓存过，就返回缓存的位置信息
@@ -2929,11 +2835,18 @@ private[spark] class DAGScheduler(
       logInfo(s"=====<获取partition:${partition}的偏好位置>当前rdd(${rdd})的partition(${partition})已被缓存,其位置为${cached}=====")
       return (cached,Nil)
     }*/
+
+    /**
+     * Custom modifications by jaken
+     * 获得缓存的位置和大小：首先会查看cacheLocsAndSizes中有没有记录[这不代表rdd被缓存了,而是当前stage有没有访问过该RDD]
+     * 如果没有记录过,就会继续判断rdd.getStorageLevel == StorageLevel.NONE
+     * true：该RDD被缓存了,返回缓存的位置和大小 false：将RDD记录在cacheLocsAndSizes中,值为空
+     */
     val (cachedLocs, cachedSize) = getCacheLocsAndSizes(rdd)(partition)
     if (cachedLocs.nonEmpty) {
       // logInfo(s"=====<获取partition:${partition}的偏好位置>当前rdd(${rdd})的partition(${partition})已被缓存,其位置为${cachedLocs},分区大小为${cachedSize}=====")
       fromCached = true
-      return (cachedLocs, cachedSize)
+      return (cachedLocs, cachedSize, cachedSize.sum)
     }
     // val cachedLocsAndSizes = getCacheLocsAndSizes(rdd)(partition)
     //    logInfo(s"all cacheLocsAndSizes=${cacheLocsAndSizes}")
@@ -2945,10 +2858,14 @@ private[spark] class DAGScheduler(
     // If the RDD has some placement preferences (as is the case for input RDDs), get those
     // 如果有位置偏好 那就选择偏好的位置
     // TODO 当shuffle的每个分片很小 也就是数据本地性等级为no_pref时 locations为null
-    val (locations, sizes) = rdd.preferredLocationsAndSizes(rdd.partitions(partition))
+    val (locations, sizes, totalSize) = rdd.preferredLocationsAndSizes(rdd.partitions(partition))
+    /*logInfo(s"#####[getPreferredLocsAndSizesInternal]当前访问的RDD=${rdd},是否为shuffleRDD=${rdd.isInstanceOf[ShuffledRDD[_, _, _]]}," +
+      s"locations=${locations}," +
+      s"sizes=${sizes},totalSize=${totalSize},#####")*/
     val rddPrefs = locations.toList
-    if (rddPrefs.nonEmpty) {
-      return (rddPrefs.map(TaskLocation(_)), sizes)
+    // 为NO_PREF加入totalSize的条件
+    if (rddPrefs.nonEmpty || totalSize != 0L) {
+      return (rddPrefs.map(TaskLocation(_)), sizes, totalSize)
     }
 
     // If the RDD has narrow dependencies, pick the first partition of the first narrow dependency
@@ -2962,15 +2879,16 @@ private[spark] class DAGScheduler(
       case n: NarrowDependency[_] =>
         for (inPart <- n.getParents(partition)) {
           // 递归计算rdd的偏好位置
-          val (locs, sizes) = getPreferredLocsAndSizesInternal(n.rdd, inPart, visited)
-          if (locs != Nil) {
-            return (locs, sizes)
+          val (locs, sizes, totalSize) = getPreferredLocsAndSizesInternal(n.rdd, inPart, visited)
+          // 为NO_PREF加入totalSize的条件
+          if (locs != Nil || totalSize != 0L) {
+            return (locs, sizes, totalSize)
           }
         }
 
       case _ =>
     }
-    (Nil, Nil)
+    (Nil, Nil, 0L)
   }
 
   /** Mark a map stage job as finished with the given output stats, and report to its listener. */
@@ -3060,7 +2978,7 @@ private[scheduler] class DAGSchedulerEventProcessLoop(dagScheduler: DAGScheduler
 
     case GettingResultEvent(taskInfo) =>
       dagScheduler.handleGetTaskResult(taskInfo)
-      // 处理已经完成的任务 更新任务的metrics信息等
+    // 处理已经完成的任务 更新任务的metrics信息等
     case completion: CompletionEvent =>
       dagScheduler.handleTaskCompletion(completion)
 

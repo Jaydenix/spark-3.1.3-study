@@ -54,4 +54,7 @@ class OutputMetrics private[spark] () extends Serializable {
 
   private[spark] def setBytesWritten(v: Long): Unit = _bytesWritten.setValue(v)
   private[spark] def setRecordsWritten(v: Long): Unit = _recordsWritten.setValue(v)
+
+
+  override def toString = s"OutputMetrics(bytesWritten=$bytesWritten, recordsWritten=$recordsWritten)"
 }

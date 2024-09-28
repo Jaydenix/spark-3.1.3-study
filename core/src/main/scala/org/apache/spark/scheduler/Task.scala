@@ -194,13 +194,13 @@ private[spark] abstract class Task[T](
    * Custom modifications by jaken
    * 加入preferredLocsAndSizes属性
    */
-  def preferredLocsAndSizes: IndexedSeq[(Seq[TaskLocation], Seq[Long])] = IndexedSeq.empty
+  def preferredLocsSizesTotalSize: IndexedSeq[(Seq[TaskLocation], Seq[Long], Long)] = IndexedSeq.empty
 
   /**
    * Custom modifications by jaken
    * 加入任务总数据大小属性
    */
-  def taskSize: Long = 0
+  def readSize: Long = 0
 
   // Map output tracker epoch. Will be set by TaskSetManager.
   var epoch: Long = -1
@@ -265,8 +265,8 @@ private[spark] abstract class Task[T](
     }
   }
 
-  override def toString: String = s"Task(appId=$appId,jobId=$jobId,stageId=$stageId," +
-    s"partitionId=$partitionId,preferredLocations=${preferredLocations},preferredLocsAndSizes=${preferredLocsAndSizes}" +
+  override def toString: String = s"Task(stageId=$stageId," +
+    s"partitionId=$partitionId,preferredLocations=${preferredLocations},preferredLocsSizesTotalSize=${preferredLocsSizesTotalSize}" +
     s"stageAttemptId=$stageAttemptId," +
     s"localProperties=$localProperties,taskMemoryManager$taskMemoryManager, context=$context, taskThread=$taskThread," +
     s" )"

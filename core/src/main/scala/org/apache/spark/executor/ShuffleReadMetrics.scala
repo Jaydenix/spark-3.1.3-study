@@ -122,6 +122,8 @@ class ShuffleReadMetrics private[spark] () extends Serializable {
       _recordsRead.add(metric.recordsRead)
     }
   }
+
+  override def toString = s"ShuffleReadMetrics(remoteBlocksFetched=$remoteBlocksFetched, localBlocksFetched=$localBlocksFetched, remoteBytesRead=$remoteBytesRead, remoteBytesReadToDisk=$remoteBytesReadToDisk, localBytesRead=$localBytesRead, fetchWaitTime=$fetchWaitTime, recordsRead=$recordsRead, totalBytesRead=$totalBytesRead, totalBlocksFetched=$totalBlocksFetched)"
 }
 
 
