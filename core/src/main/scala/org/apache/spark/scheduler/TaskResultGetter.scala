@@ -64,7 +64,7 @@ private[spark] class TaskResultGetter(sparkEnv: SparkEnv, scheduler: TaskSchedul
       override def run(): Unit = Utils.logUncaughtExceptions {
         try {
           val (result, size) = serializer.get().deserialize[TaskResult[_]](serializedData) match {
-            // 直接结果 也就是executor直接发送给driver的 大小不超过1MB
+            // 直接结果 也就是executor直接发送给driver的MapStatus(shuffle的文件大小和所在位置) 大小不超过1MB
             case directResult: DirectTaskResult[_] =>
               if (!taskSetManager.canFetchMoreResults(serializedData.limit())) {
                 // kill the task so that it will not become zombie task

@@ -27,18 +27,19 @@ import org.apache.spark.annotation.DeveloperApi
  */
 @DeveloperApi
 class TaskInfo(
-    val taskId: Long,
-    /**
-     * The index of this task within its task set. Not necessarily the same as the ID of the RDD
-     * partition that the task is computing.
-     */
-    val index: Int,
-    val attemptNumber: Int,
-    val launchTime: Long,
-    val executorId: String,
-    val host: String,
-    val taskLocality: TaskLocality.TaskLocality,
-    val speculative: Boolean) {
+                val taskId: Long,
+
+                /**
+                 * The index of this task within its task set. Not necessarily the same as the ID of the RDD
+                 * partition that the task is computing.
+                 */
+                val index: Int,
+                val attemptNumber: Int,
+                val launchTime: Long,
+                val executorId: String,
+                val host: String,
+                val taskLocality: TaskLocality.TaskLocality,
+                val speculative: Boolean) {
 
   /**
    * The time when the task started remotely getting the result. Will not be set if the
@@ -70,6 +71,13 @@ class TaskInfo(
 
   var killed = false
 
+  /**
+   * Custom modifications by jaken
+   * 添加下面两个属性表示不计入结果拉取的时间
+   */
+
+  var finishTimeWithoutFetchRes = 0L
+  var durationWithoutFetchRes = 0L
   private[spark] def markGettingResult(time: Long): Unit = {
     gettingResultTime = time
   }

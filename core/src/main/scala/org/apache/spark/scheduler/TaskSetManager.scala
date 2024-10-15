@@ -77,6 +77,11 @@ private[spark] class TaskSetManager(
     .map { case (t, idx) => t.partitionId -> idx }.toMap
   val numTasks = tasks.length
   val copiesRunning = new Array[Int](numTasks)
+  /**
+   * Custom modifications by jaken
+   * 获得executor的核心数 用于性能评估
+   */
+  val EXECUTOR_CORES = conf.getInt("spark.executor.cores", 1)
 
   val speculationEnabled = conf.get(SPECULATION_ENABLED)
   // Quantile of tasks at which to start speculation
@@ -175,6 +180,21 @@ private[spark] class TaskSetManager(
   // Task index, start and finish time for each task attempt (indexed by task ID)
   private[scheduler] val taskInfos = new HashMap[Long, TaskInfo]
 
+  /**
+   * Custom modifications by jaken
+   * executor 到 调度的任务id映射
+   */
+  private[scheduler] val executorIdToScheduledTaskIds = new HashMap[String, ArrayBuffer[Long]]
+  private[scheduler] val executorIdToFinishedTaskIds = new HashMap[String, ArrayBuffer[Long]]
+  private[scheduler] val executorIdToRunningTaskIds = new HashMap[String, ArrayBuffer[Long]]
+  /**
+   * Custom modifications by jaken
+   * 性能评估
+   */
+  private[scheduler] val executorIdToLastRoundAvgProcessRate = new HashMap[String, Double]
+  private[scheduler] val executorIdToEarliestIdleTime = new HashMap[String, Long]
+  private val EVALUATE_ROUND = conf.getInt("spark.evaluate.round", 1)
+
   // Use a MedianHeap to record durations of successful tasks so we know when to launch
   // speculative tasks. This is only used when speculation is enabled, to avoid the overhead
   // of inserting into the heap when the heap won't be used.
@@ -242,10 +262,10 @@ private[spark] class TaskSetManager(
         pendingTaskSetToAddTo.forExecutor(executorName) = taskIds.sortBy(index => -tasks(index).readSize)
       }
     }
-    pendingTaskSetToAddTo.forHost.foreach{
-      case (hostName,taskIds) => {
+    pendingTaskSetToAddTo.forHost.foreach {
+      case (hostName, taskIds) => {
         // 加个负号表示降序
-        pendingTaskSetToAddTo.forHost(hostName)=taskIds.sortBy(index => -tasks(index).readSize)
+        pendingTaskSetToAddTo.forHost(hostName) = taskIds.sortBy(index => -tasks(index).readSize)
       }
     }
     pendingTaskSetToAddTo.forRack.foreach {
@@ -529,6 +549,68 @@ private[spark] class TaskSetManager(
     if (!isZombie && !offerExcluded) {
       val curTime = clock.getTimeMillis()
 
+      logInfo(s"#####executorIdToScheduledTaskIds=\n${executorIdToScheduledTaskIds.mkString("\n")}#####")
+      logInfo(s"#####executorIdToRunningTaskIds=\n${executorIdToRunningTaskIds.mkString("\n")}#####")
+      logInfo(s"#####executorIdToFinishedTaskIds=\n${executorIdToFinishedTaskIds.mkString("\n")}#####")
+      val EVALUATE_TASK_THRESHOLD = EXECUTOR_CORES * EVALUATE_ROUND
+      // 下面开始计算executor的处理速度
+      executorIdToFinishedTaskIds.foreach { case (executorId, finishedTaskIds) =>
+        // EVALUATE_ROUND 表示从哪一轮才开始计算exec的处理速度
+        // 当完成的任务数 <= 开始评估的任务数时,表明当前exec无需考虑
+        val taskIdsToConsider = if (finishedTaskIds.size <= EVALUATE_TASK_THRESHOLD) {
+          ArrayBuffer.empty[Long]
+        }
+        // 当完成的任务数 > 开始评估的任务数 && 能用于评估的任务数 <= EXECUTOR_CORES时,取所有能用于评估的任务数
+        else if (finishedTaskIds.size - EVALUATE_TASK_THRESHOLD <= EXECUTOR_CORES) {
+          finishedTaskIds.takeRight(finishedTaskIds.size - EVALUATE_TASK_THRESHOLD)
+        }
+        // 否则取最后 EXECUTOR_CORES 个任务
+        else {
+          finishedTaskIds.takeRight(EXECUTOR_CORES)
+        }
+
+        // 初始化总数据量和总运行时间
+        var totalDataSizeMB: Double = 0.0 // 数据量用MB表示
+        var totalDurationS: Double = 0.0 // 以s为单位
+
+        // 遍历任务 ID，获取任务的运行时间和数据量
+        taskIdsToConsider.foreach { tid =>
+          val taskInfo = taskInfos(tid)
+          val task = tasks(taskInfo.index)
+
+          // 获取任务的运行时间和数据量
+          val taskDurationS = (taskInfo.durationWithoutFetchRes / 1000.0).formatted("%.2f").toDouble // 运行时间转换为秒并保留两位小数
+          val taskDataSizeMB = (task.readSize.toDouble / (1 << 20)).formatted("%.2f").toDouble // 数据量转换为MB并保留两位小数
+
+          // 任务的metrics信息需要等任务解决拉取后才能得到 所以实时获取最近完成任务的metrics是不太方便的
+         /* logInfo(s"#####当前评估的任务tid=${tid},partitionId=${task.partitionId}," +
+            s"Duration=${taskDurationS}s,DataSize=${taskDataSizeMB}MB #####")
+          taskInfo.accumulables.foreach { accInfo =>
+            val name = accInfo.name.getOrElse("Unnamed")
+            // update表示该任务的在当前指标下的值
+            val update = accInfo.update.getOrElse("No Update")
+            // value表示当前指标下所有任务的累加值
+            // val value = accInfo.value.getOrElse("No Value")
+            logInfo(s"Metric: $name, Update: $update")
+          }*/
+
+          // 累加运行时间和数据量
+          totalDurationS += taskDurationS
+          totalDataSizeMB += taskDataSizeMB
+        }
+
+        // 计算平均处理速率，保留两位小数
+        if (totalDurationS > 0) {
+          // 单位MB/s
+          val avgProcessRate = (totalDataSizeMB / totalDurationS).formatted("%.2f").toDouble // 保留两位小数
+          executorIdToLastRoundAvgProcessRate(executorId) = avgProcessRate
+        } else {
+          // 如果总运行时间为0，避免除以0的错误
+          executorIdToLastRoundAvgProcessRate(executorId) = 0.0
+        }
+      }
+      logInfo(s"#####executorIdToLastRoundAvgProcessRate=\n${executorIdToLastRoundAvgProcessRate.mkString("\n")}#####")
+
       // allowedLocality = 最大的数据本地性等级
       var allowedLocality = maxLocality
       // 如果所有任务的副本中的最大数据本地性等级不是NO_PREF
@@ -601,6 +683,12 @@ private[spark] class TaskSetManager(
               // 将当前任务加入到待运行的集合中
               addRunningTask(taskId)
 
+              /**
+               * Custom modifications by jaken
+               * map, value都是一个有序的集合
+               */
+              executorIdToScheduledTaskIds.getOrElseUpdate(execId, ArrayBuffer()) += taskId
+              executorIdToRunningTaskIds.getOrElseUpdate(execId, ArrayBuffer()) += taskId
               // We used to log the time it takes to serialize the task, but task size is already
               // a good proxy to task serialization time.
               // val timeTaken = clock.getTime() - startTime

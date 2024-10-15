@@ -676,30 +676,40 @@ private[spark] class TaskSchedulerImpl(
     //    logInfo(s">>>>>五.<开始>遍历除CPU外的每种资源，如果executor满足，则将任务放置>>>>>")
 
     for (taskSet <- sortedTaskSets) {
+      /**
+       * Custom modifications by jaken
+       * 等待策略 包括exec初始化等待和序列化等待
+       */
       // TODO adapt for cluster mode
       // spark.exec.wait是调控exec初始化等待和序列化等待的配置
-      if (conf.get("spark.exec.wait", "false").toBoolean) {
+      val readyExecCount = shuffledOffers.filter(o => o.cores != 0).map(_.host).distinct.size
+      val execThreshold = conf.get("spark.ready.hosts", "2").toInt
+      // 如果readyExecCount=0 表明当前没有可用的exec 只有当集群中至少有一个可用exec时，才需要考虑等待问题
+      if (readyExecCount != 0 && conf.get("spark.exec.wait", "false").toBoolean) {
         // execInitWait是一个标识 所有应用只会等待一次
         if (execInitWait &&
           // 如果当前调度的任务集中任务的数量 比
           // [集群中可用的线程数(executorIdToHost.size * conf.get("spark.executor.cores","1").toInt)还少]/现将这个值改成executor的数目
           // 表明没有等待的必要 因为该任务集不会使用集群中的所有资源
           taskSet.numTasks >= executorIdToHost.size) {
+          logInfo(s"#####readyExecCount=${readyExecCount},execThreshold=${execThreshold}#####")
           // 如果有"spark.ready.hosts"个主机已经准备好executor了,表明除了driver所在节点的executor,其他节点上也有可用executor
-          if (shuffledOffers.filter(o => o.cores != 0).map(_.host).distinct.size < conf.get("spark.ready.hosts", "2").toInt) {
+          if (readyExecCount < execThreshold) {
             if (execWaitTimeStart == 0L) execWaitTimeStart = clock.getTimeMillis()
             logInfo(s"=====等待除driver节点外其他节点上的可用executor=====")
             shuffledOffers = IndexedSeq.empty
           }
           else {
             execInitWait = false
-            logInfo(s"=====exec初始化等待${clock.getTimeMillis() - execWaitTimeStart}ms=====")
+            if (execWaitTimeStart == 0L) logInfo(s"=====readyExecCount(${readyExecCount}) >= spark.ready.hosts(${execThreshold})无需等待=====")
+            else logInfo(s"=====exec初始化等待${clock.getTimeMillis() - execWaitTimeStart}ms=====")
             // exec初始化等待之后就进入了序列化等待[如果满足条件] 在此记录至少运行一个任务的exec数量
             recoredUsedExec = usedExec.clone()
           }
         }
         if (execSeriWait && !execInitWait) {
           // 在exec初始化等待完毕之后 如果存在因任务数量导致的序列化差异问题[只有少数exec完成了任务]
+          // 直到新创建的exec完成了一个任务时,即(usedExec.size > recoredUsedExec.size)才会退出序列化等待
           if (recoredUsedExec.nonEmpty && usedExec.size == recoredUsedExec.size) {
             // 将已经完成了一个任务的exec对应的核心数设置为0 意味着它需要等待
             for ((offer, index) <- shuffledOffers.zipWithIndex) {
@@ -726,6 +736,10 @@ private[spark] class TaskSchedulerImpl(
 
       // 获取已完成任务的指标
       // 输出已经完成任务的指标信息
+      /**
+       * Custom modifications by jaken
+       * 获取已完成任务的指标
+       */
       /*for ((taskId, taskInfo) <- taskSet.taskInfos) {
         // 只在任务完成后获取累加器信息
         if (taskInfo.finished) {
@@ -1026,9 +1040,19 @@ private[spark] class TaskSchedulerImpl(
               }
             }
             if (TaskState.isFinished(state)) {
-              val task = taskSet.tasks(taskSet.taskInfos(tid).index)
+              /**
+               * Custom modifications by jaken
+               * 更新任务的完成信息
+               */
+              val taskInfo = taskSet.taskInfos(tid)
+              val task = taskSet.tasks(taskInfo.index)
+              taskInfo.finishTimeWithoutFetchRes = clock.getTimeMillis()
+              taskInfo.durationWithoutFetchRes = taskInfo.finishTimeWithoutFetchRes - taskInfo.launchTime
+              taskSet.executorIdToFinishedTaskIds.getOrElseUpdate(taskIdToExecutorId(tid), ArrayBuffer()) += tid
+              taskSet.executorIdToRunningTaskIds(taskIdToExecutorId(tid)) -= tid
+
               // 到这里的时间和获取任务的结果并最终更新任务duration的时间其实非常接近
-              logInfo(s"#####收到任务${tid}的完成消息,computeTime = ${clock.getTimeMillis() - taskSet.taskInfos(tid).launchTime}," +
+              logInfo(s"#####收到任务${tid}的完成消息,computeTime = ${taskInfo.durationWithoutFetchRes}ms," +
                 s"taskSize = ${task.readSize}}#####")
               // 任务的metrics信息现在是获取不到的 需要等后面enqueueSuccessfulTask创建新线程获取任务结果并更新metrics
               /*taskSet.taskInfos(tid).accumulables.foreach { accInfo =>
