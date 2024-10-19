@@ -187,6 +187,8 @@ private[spark] class TaskSetManager(
   private[scheduler] val executorIdToScheduledTaskIds = new HashMap[String, ArrayBuffer[Long]]
   private[scheduler] val executorIdToFinishedTaskIds = new HashMap[String, ArrayBuffer[Long]]
   private[scheduler] val executorIdToRunningTaskIds = new HashMap[String, ArrayBuffer[Long]]
+  private[scheduler] var scheduledTasks = 0
+  private[scheduler] var finishedTasks = 0
   /**
    * Custom modifications by jaken
    * 性能评估
@@ -548,15 +550,17 @@ private[spark] class TaskSetManager(
     // 如果当前executor可用
     if (!isZombie && !offerExcluded) {
       val curTime = clock.getTimeMillis()
-
+      logInfo(s"#####scheduledTasks=${scheduledTasks},finishedTasks=${finishedTasks},totalTasks=${numTasks}#####")
       logInfo(s"#####executorIdToScheduledTaskIds=\n${executorIdToScheduledTaskIds.mkString("\n")}#####")
       logInfo(s"#####executorIdToRunningTaskIds=\n${executorIdToRunningTaskIds.mkString("\n")}#####")
       logInfo(s"#####executorIdToFinishedTaskIds=\n${executorIdToFinishedTaskIds.mkString("\n")}#####")
+      // logInfo(s"#####executorIdToEarliestIdleTime[调度新任务前]=\n${executorIdToEarliestIdleTime.mkString("\n")}#####")
+
       val EVALUATE_TASK_THRESHOLD = EXECUTOR_CORES * EVALUATE_ROUND
       // 下面开始计算executor的处理速度
       executorIdToFinishedTaskIds.foreach { case (executorId, finishedTaskIds) =>
         // EVALUATE_ROUND 表示从哪一轮才开始计算exec的处理速度
-        // 当完成的任务数 <= 开始评估的任务数时,表明当前exec无需考虑
+        // 当完成的任务数 <= 开始评估的任务数时,表明当前exec无需考虑,此时其性能会记录为0
         val taskIdsToConsider = if (finishedTaskIds.size <= EVALUATE_TASK_THRESHOLD) {
           ArrayBuffer.empty[Long]
         }
@@ -570,8 +574,8 @@ private[spark] class TaskSetManager(
         }
 
         // 初始化总数据量和总运行时间
-        var totalDataSizeMB: Double = 0.0 // 数据量用MB表示
-        var totalDurationS: Double = 0.0 // 以s为单位
+        var totalDataSizeKB: Double = 0.0 // 数据量用KB表示
+        var totalDurationMS: Long = 0 // 以ms为单位
 
         // 遍历任务 ID，获取任务的运行时间和数据量
         taskIdsToConsider.foreach { tid =>
@@ -579,30 +583,30 @@ private[spark] class TaskSetManager(
           val task = tasks(taskInfo.index)
 
           // 获取任务的运行时间和数据量
-          val taskDurationS = (taskInfo.durationWithoutFetchRes / 1000.0).formatted("%.2f").toDouble // 运行时间转换为秒并保留两位小数
-          val taskDataSizeMB = (task.readSize.toDouble / (1 << 20)).formatted("%.2f").toDouble // 数据量转换为MB并保留两位小数
+          val taskDurationMs = taskInfo.durationWithoutFetchRes
+          val taskDataSizeKB = (task.readSize.toDouble / 1024).formatted("%.2f").toDouble // 数据量转换为KB并保留两位小数
 
           // 任务的metrics信息需要等任务解决拉取后才能得到 所以实时获取最近完成任务的metrics是不太方便的
-         /* logInfo(s"#####当前评估的任务tid=${tid},partitionId=${task.partitionId}," +
-            s"Duration=${taskDurationS}s,DataSize=${taskDataSizeMB}MB #####")
-          taskInfo.accumulables.foreach { accInfo =>
-            val name = accInfo.name.getOrElse("Unnamed")
-            // update表示该任务的在当前指标下的值
-            val update = accInfo.update.getOrElse("No Update")
-            // value表示当前指标下所有任务的累加值
-            // val value = accInfo.value.getOrElse("No Value")
-            logInfo(s"Metric: $name, Update: $update")
-          }*/
+          /* logInfo(s"#####当前评估的任务tid=${tid},partitionId=${task.partitionId}," +
+             s"Duration=${taskDurationS}s,DataSize=${taskDataSizeMB}MB #####")
+           taskInfo.accumulables.foreach { accInfo =>
+             val name = accInfo.name.getOrElse("Unnamed")
+             // update表示该任务的在当前指标下的值
+             val update = accInfo.update.getOrElse("No Update")
+             // value表示当前指标下所有任务的累加值
+             // val value = accInfo.value.getOrElse("No Value")
+             logInfo(s"Metric: $name, Update: $update")
+           }*/
 
           // 累加运行时间和数据量
-          totalDurationS += taskDurationS
-          totalDataSizeMB += taskDataSizeMB
+          totalDurationMS += taskDurationMs
+          totalDataSizeKB += taskDataSizeKB
         }
 
         // 计算平均处理速率，保留两位小数
-        if (totalDurationS > 0) {
+        if (totalDurationMS > 0) {
           // 单位MB/s
-          val avgProcessRate = (totalDataSizeMB / totalDurationS).formatted("%.2f").toDouble // 保留两位小数
+          val avgProcessRate = (totalDataSizeKB / totalDurationMS).formatted("%.2f").toDouble // 保留两位小数
           executorIdToLastRoundAvgProcessRate(executorId) = avgProcessRate
         } else {
           // 如果总运行时间为0，避免除以0的错误
@@ -688,7 +692,19 @@ private[spark] class TaskSetManager(
                * map, value都是一个有序的集合
                */
               executorIdToScheduledTaskIds.getOrElseUpdate(execId, ArrayBuffer()) += taskId
+              scheduledTasks += 1
               executorIdToRunningTaskIds.getOrElseUpdate(execId, ArrayBuffer()) += taskId
+              // 当前executor已经存在评估的性能 更新executor的最早空闲时间
+              // 所以从第三轮的任务开始 才会有任务的预估时间
+              if (executorIdToLastRoundAvgProcessRate.getOrElse(execId, 0.0) > 0) {
+                val evalTaskDuration = (task.readSize / (1024 * executorIdToLastRoundAvgProcessRate(execId))).toLong
+                val curTime = clock.getTimeMillis()
+                logInfo(s"#####executorIdToEarliestIdleTime[调度新任务前]=\n${executorIdToEarliestIdleTime.mkString("\n")}#####")
+                logInfo(s"#####pid=${task.partitionId},execId=${execId},当前时间=${curTime},预估任务完成时间=${evalTaskDuration}#####")
+                executorIdToEarliestIdleTime.update(execId, Math.max(executorIdToEarliestIdleTime.getOrElseUpdate(execId, 0L),
+                  curTime + evalTaskDuration))
+                logInfo(s"#####executorIdToEarliestIdleTime[调度新任务后]=\n${executorIdToEarliestIdleTime.mkString("\n")}#####")
+              }
               // We used to log the time it takes to serialize the task, but task size is already
               // a good proxy to task serialization time.
               // val timeTaken = clock.getTime() - startTime
@@ -713,8 +729,7 @@ private[spark] class TaskSetManager(
                 task.localProperties,
                 taskResourceAssignments,
                 serializedTask)
-          }
-      }
+          }      }
       val hasPendingTasks = pendingTasks.all.nonEmpty || pendingSpeculatableTasks.all.nonEmpty
       // 如果任务没有被执行但是任务队列中有任务,表示任务资源请求被拒绝了
       val hasScheduleDelayReject =

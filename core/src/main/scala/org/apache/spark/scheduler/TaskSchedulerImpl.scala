@@ -1049,6 +1049,7 @@ private[spark] class TaskSchedulerImpl(
               taskInfo.finishTimeWithoutFetchRes = clock.getTimeMillis()
               taskInfo.durationWithoutFetchRes = taskInfo.finishTimeWithoutFetchRes - taskInfo.launchTime
               taskSet.executorIdToFinishedTaskIds.getOrElseUpdate(taskIdToExecutorId(tid), ArrayBuffer()) += tid
+              taskSet.finishedTasks += 1
               taskSet.executorIdToRunningTaskIds(taskIdToExecutorId(tid)) -= tid
 
               // 到这里的时间和获取任务的结果并最终更新任务duration的时间其实非常接近
