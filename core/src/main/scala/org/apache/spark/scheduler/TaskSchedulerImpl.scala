@@ -682,26 +682,26 @@ private[spark] class TaskSchedulerImpl(
        */
       // TODO adapt for cluster mode
       // spark.exec.wait是调控exec初始化等待和序列化等待的配置
-      val readyExecCount = shuffledOffers.filter(o => o.cores != 0).map(_.host).distinct.size
-      val execThreshold = conf.get("spark.ready.hosts", "2").toInt
-      // 如果readyExecCount=0 表明当前没有可用的exec 只有当集群中至少有一个可用exec时，才需要考虑等待问题
-      if (readyExecCount != 0 && conf.get("spark.exec.wait", "false").toBoolean) {
+      val readyHostCount = shuffledOffers.filter(o => o.cores != 0).map(_.host).distinct.size
+      val hostThreshold = conf.get("spark.ready.hosts", "2").toInt
+      // 如果readyHostCount=0 表明当前没有可用的exec 只有当集群中至少有一个可用exec时，才需要考虑等待问题
+      if (readyHostCount != 0 && conf.get("spark.exec.wait", "false").toBoolean) {
         // execInitWait是一个标识 所有应用只会等待一次
         if (execInitWait &&
           // 如果当前调度的任务集中任务的数量 比
           // [集群中可用的线程数(executorIdToHost.size * conf.get("spark.executor.cores","1").toInt)还少]/现将这个值改成executor的数目
           // 表明没有等待的必要 因为该任务集不会使用集群中的所有资源
           taskSet.numTasks >= executorIdToHost.size) {
-          logInfo(s"#####readyExecCount=${readyExecCount},execThreshold=${execThreshold}#####")
+          logInfo(s"#####readyHostCount=${readyHostCount},hostThreshold=${hostThreshold}#####")
           // 如果有"spark.ready.hosts"个主机已经准备好executor了,表明除了driver所在节点的executor,其他节点上也有可用executor
-          if (readyExecCount < execThreshold) {
+          if (readyHostCount < hostThreshold) {
             if (execWaitTimeStart == 0L) execWaitTimeStart = clock.getTimeMillis()
             logInfo(s"=====等待除driver节点外其他节点上的可用executor=====")
             shuffledOffers = IndexedSeq.empty
           }
           else {
             execInitWait = false
-            if (execWaitTimeStart == 0L) logInfo(s"=====readyExecCount(${readyExecCount}) >= spark.ready.hosts(${execThreshold})无需等待=====")
+            if (execWaitTimeStart == 0L) logInfo(s"=====readyHostCount(${readyHostCount}) >= spark.ready.hosts(${hostThreshold})无需等待=====")
             else logInfo(s"=====exec初始化等待${clock.getTimeMillis() - execWaitTimeStart}ms=====")
             // exec初始化等待之后就进入了序列化等待[如果满足条件] 在此记录至少运行一个任务的exec数量
             recoredUsedExec = usedExec.clone()
