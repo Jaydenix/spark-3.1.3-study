@@ -195,11 +195,26 @@ private[spark] class TaskSetManager(
    */
   private[scheduler] val executorIdToLastRoundAvgProcessRate = new HashMap[String, Double]
   private[scheduler] val executorIdToLastRoundAvgDurationWithoutFetch = new HashMap[String, Long]
+  // 从 spark-defaults.conf 中获取 spark.host.performance 属性值
+  private[scheduler] val hostPerformanceString = conf.get("spark.host.performance")
+  // 拆分字符串并封装到 HashMap 中
+  private[scheduler] val hostToPerformance = new HashMap[String, Double]()
+  // hostPerformanceString的值类似为
+  // 169.254.21.101:2,169.254.21.102:2,169.254.21.103:0,169.254.21.104:1,169.254.21.105:1,169.254.21.106:1,169.254.21.107:1,169.254.21.108:0
+  hostPerformanceString.split(",").foreach { entry =>
+    val Array(host, performance) = entry.split(":")
+    hostToPerformance.put(host, performance.toDouble)
+  }
+  logInfo(s"#####hostToPerformance=${hostToPerformance.mkString(",")} #####")
+
+  // 下面的方法只能得到当前主机上配置文件的值
+  // logInfo(s"#####SPARK_LOCAL_HOSTNAME = ${sys.env.get("SPARK_LOCAL_HOSTNAME")}#####")
   // exec的最早空闲时间 代表着当前exec所有任务都完成的时间
   private[scheduler] val executorIdToEarliestIdleTime = new HashMap[String, Long]
   private val EVALUATE_ROUND = conf.getInt("spark.evaluate.round", 1)
   private val PROCESS_RATE_THRESHOLD = conf.getDouble("spark.processRate.threshold", 1.25)
   private val FIRST_ROUND_COMPENSATE = conf.getDouble("spark.firstRound.compensate", 0.7)
+
   // 标记当前executor需不需要等待
   private val skipExec = new mutable.HashSet[String]()
   // Use a MedianHeap to record durations of successful tasks so we know when to launch
@@ -249,12 +264,34 @@ private[spark] class TaskSetManager(
     logDebug(s"Adding pending tasks took $duration ms")
   }
 
+  private def initLocationWeight(speculatable: Boolean = false): Unit = {
+    if (isZombie) return
+
+    val pendingTaskSetToAddTo = if (speculatable) pendingSpeculatableTasks else pendingTasks
+    // 遍历 pendingTaskSetToAddTo.all，更新每个任务的 locationWeight
+    pendingTaskSetToAddTo.all.foreach { taskIndex =>
+      val task = tasks(taskIndex) // 获取任务对象
+
+      // 计算任务数据所在地对应的性能值之和
+      val locationWeightSum = tasks(taskIndex).preferredLocations.map { location =>
+        val host = location.host
+        hostToPerformance.getOrElse(host, 0.0) // 获取 host 对应的性能值，默认值为 0
+      }.sum
+
+      // 更新任务的 locationWeight
+      task.locationWeight = locationWeightSum
+      // logInfo(s"#####taskIndex=${taskIndex},locationWeight=${locationWeightSum} #####")
+    }
+
+  }
+
   /**
    * Custom modifications by jaken
-   * sort queue by task.allSize
+   * sort queue by 首先按照位置权重降序排序 数据在高性能节点上则权重更高,如果权重相同,则按照数据量升序排序
    */
-  // DescSortPendingTasks()
-  private def DescSortPendingTasks(speculatable: Boolean = false): Unit = {
+  if (conf.getBoolean("spark.descSort.locationWeight", defaultValue = true)) descSortPendingTasksByLocationWeight()
+
+  private def descSortPendingTasksByLocationWeight(speculatable: Boolean = false): Unit = {
     logInfo(s"============降序排序前============")
     logInfo(s"前50个pendingTasks.forExecutor=\n${pendingTasks.forExecutor.take(50).mkString("\n")}\n" +
       s"前50个pendingTasks.forHost=\n${pendingTasks.forHost.take(50).mkString("\n")}\n" +
@@ -263,26 +300,40 @@ private[spark] class TaskSetManager(
       s"前50个pendingTasks.all=\n${pendingTasks.all.take(50)}\n")
     if (isZombie) return
     val pendingTaskSetToAddTo = if (speculatable) pendingSpeculatableTasks else pendingTasks
-    pendingTaskSetToAddTo.forExecutor.foreach {
+    // 排序前先更新位置权重
+    initLocationWeight()
+
+    /*pendingTaskSetToAddTo.forExecutor.foreach {
       case (executorName, taskIds) => {
         // 加个负号表示降序
-        pendingTaskSetToAddTo.forExecutor(executorName) = taskIds.sortBy(index => -tasks(index).readSize)
+        pendingTaskSetToAddTo.forExecutor(executorName) = taskIds.sortBy{ index =>
+  (-tasks(index).locationWeight, tasks(index).readSize)
+}
       }
-    }
+    }*/
     pendingTaskSetToAddTo.forHost.foreach {
       case (hostName, taskIds) => {
         // 加个负号表示降序
-        pendingTaskSetToAddTo.forHost(hostName) = taskIds.sortBy(index => -tasks(index).readSize)
+        pendingTaskSetToAddTo.forHost(hostName) = taskIds.sortBy { index =>
+          (-tasks(index).locationWeight, tasks(index).readSize)
+        }
       }
     }
-    pendingTaskSetToAddTo.forRack.foreach {
-      case (rackName, taskIds) => {
-        // 加个负号表示降序
-        pendingTaskSetToAddTo.forRack(rackName) = taskIds.sortBy(index => -tasks(index).readSize)
-      }
-    }
-    pendingTaskSetToAddTo.noPrefs = pendingTaskSetToAddTo.noPrefs.sortBy(index => -tasks(index).readSize)
-    pendingTaskSetToAddTo.noPrefs = pendingTaskSetToAddTo.all.sortBy(index => -tasks(index).readSize)
+    /* pendingTaskSetToAddTo.forRack.foreach {
+       case (rackName, taskIds) => {
+         // 加个负号表示降序
+         pendingTaskSetToAddTo.forRack(rackName) = taskIds.sortBy{ index =>
+   (-tasks(index).locationWeight, tasks(index).readSize)
+ }
+       }
+     }
+     pendingTaskSetToAddTo.noPrefs = pendingTaskSetToAddTo.noPrefs.sortBy{ index =>
+   (-tasks(index).locationWeight, tasks(index).readSize)
+ }
+
+     pendingTaskSetToAddTo.all = pendingTaskSetToAddTo.all.sortBy{ index =>
+   (-tasks(index).locationWeight, tasks(index).readSize)
+ }*/
 
     logInfo(s"============降序排序后============")
     logInfo(s"前50个pendingTasks.forExecutor=\n${pendingTasks.forExecutor.take(50).mkString("\n")}\n" +

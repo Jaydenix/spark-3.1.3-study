@@ -198,6 +198,12 @@ private[spark] abstract class Task[T](
 
   /**
    * Custom modifications by jaken
+   * 根据任务所在位置的性能 给予一个位置权重 越大表示越可能在高速节点上计算 这个值会在任务调度前获得
+   */
+  var locationWeight: Double = 0.0
+
+  /**
+   * Custom modifications by jaken
    * 加入任务总数据大小属性
    */
   def readSize: Long = 0
