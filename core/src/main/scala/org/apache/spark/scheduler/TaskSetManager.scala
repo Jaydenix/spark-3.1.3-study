@@ -20,20 +20,20 @@ package org.apache.spark.scheduler
 import java.io.NotSerializableException
 import java.nio.ByteBuffer
 import java.util.concurrent.{ConcurrentLinkedQueue, TimeUnit}
-
 import scala.collection.immutable.Map
 import scala.collection.mutable.{ArrayBuffer, HashMap, HashSet}
 import scala.math.max
 import scala.util.control.NonFatal
-
 import org.apache.spark._
 import org.apache.spark.TaskState.TaskState
-import org.apache.spark.internal.{config, Logging}
+import org.apache.spark.internal.{Logging, config}
 import org.apache.spark.internal.config._
 import org.apache.spark.resource.ResourceInformation
 import org.apache.spark.scheduler.SchedulingMode._
 import org.apache.spark.util.{AccumulatorV2, Clock, LongAccumulator, SystemClock, Utils}
 import org.apache.spark.util.collection.MedianHeap
+
+import scala.collection.mutable
 
 /**
  * Schedules the tasks within a single TaskSet in the TaskSchedulerImpl. This class keeps track of
@@ -194,9 +194,14 @@ private[spark] class TaskSetManager(
    * 性能评估
    */
   private[scheduler] val executorIdToLastRoundAvgProcessRate = new HashMap[String, Double]
+  private[scheduler] val executorIdToLastRoundAvgDurationWithoutFetch = new HashMap[String, Long]
+  // exec的最早空闲时间 代表着当前exec所有任务都完成的时间
   private[scheduler] val executorIdToEarliestIdleTime = new HashMap[String, Long]
   private val EVALUATE_ROUND = conf.getInt("spark.evaluate.round", 1)
-
+  private val PROCESS_RATE_THRESHOLD = conf.getDouble("spark.processRate.threshold", 1.25)
+  private val FIRST_ROUND_COMPENSATE = conf.getDouble("spark.firstRound.compensate", 0.7)
+  // 标记当前executor需不需要等待
+  private val skipExec = new mutable.HashSet[String]()
   // Use a MedianHeap to record durations of successful tasks so we know when to launch
   // speculative tasks. This is only used when speculation is enabled, to avoid the overhead
   // of inserting into the heap when the heap won't be used.
@@ -568,9 +573,12 @@ private[spark] class TaskSetManager(
         else if (finishedTaskIds.size - EVALUATE_TASK_THRESHOLD <= EXECUTOR_CORES) {
           finishedTaskIds.takeRight(finishedTaskIds.size - EVALUATE_TASK_THRESHOLD)
         }
-        // 否则取最后 EXECUTOR_CORES 个任务
+        // 否则取最后 EXECUTOR_CORES 个任务 -> (该)取最近一轮的任务,该任务数属于区间[1,EXECUTOR_CORES]
         else {
-          finishedTaskIds.takeRight(EXECUTOR_CORES)
+          val round = finishedTaskIds.size / EXECUTOR_CORES
+          val leftTasks = finishedTaskIds.size - (EXECUTOR_CORES * round)
+          if (leftTasks > 0) finishedTaskIds.takeRight(finishedTaskIds.size - (EXECUTOR_CORES * round))
+          else finishedTaskIds.takeRight(EXECUTOR_CORES)
         }
 
         // 初始化总数据量和总运行时间
@@ -608,12 +616,11 @@ private[spark] class TaskSetManager(
           // 单位MB/s
           val avgProcessRate = (totalDataSizeKB / totalDurationMS).formatted("%.2f").toDouble // 保留两位小数
           executorIdToLastRoundAvgProcessRate(executorId) = avgProcessRate
-        } else {
-          // 如果总运行时间为0，避免除以0的错误
-          executorIdToLastRoundAvgProcessRate(executorId) = 0.0
+          executorIdToLastRoundAvgDurationWithoutFetch(executorId) = totalDurationMS / taskIdsToConsider.size
         }
       }
       logInfo(s"#####executorIdToLastRoundAvgProcessRate=\n${executorIdToLastRoundAvgProcessRate.mkString("\n")}#####")
+      logInfo(s"#####executorIdToLastRoundAvgDuration=\n${executorIdToLastRoundAvgDurationWithoutFetch.mkString("\n")}#####")
 
       // allowedLocality = 最大的数据本地性等级
       var allowedLocality = maxLocality
@@ -695,14 +702,41 @@ private[spark] class TaskSetManager(
               scheduledTasks += 1
               executorIdToRunningTaskIds.getOrElseUpdate(execId, ArrayBuffer()) += taskId
               // 当前executor已经存在评估的性能 更新executor的最早空闲时间
-              // 所以从第三轮的任务开始 才会有任务的预估时间
+              // 所以从第三轮的任务开始(round = 1 时) 才会有任务的预估时间
               if (executorIdToLastRoundAvgProcessRate.getOrElse(execId, 0.0) > 0) {
-                val evalTaskDuration = (task.readSize / (1024 * executorIdToLastRoundAvgProcessRate(execId))).toLong
+                // 序列化补偿
+                val evalTaskDuration = if (executorIdToFinishedTaskIds(execId).size <= EXECUTOR_CORES) {
+                  (FIRST_ROUND_COMPENSATE * task.readSize / (1024 * executorIdToLastRoundAvgProcessRate(execId))).toLong
+                } else {
+                  (task.readSize / (1024 * executorIdToLastRoundAvgProcessRate(execId))).toLong
+                }
                 val curTime = clock.getTimeMillis()
                 logInfo(s"#####executorIdToEarliestIdleTime[调度新任务前]=\n${executorIdToEarliestIdleTime.mkString("\n")}#####")
                 logInfo(s"#####pid=${task.partitionId},execId=${execId},当前时间=${curTime},预估任务完成时间=${evalTaskDuration}#####")
                 executorIdToEarliestIdleTime.update(execId, Math.max(executorIdToEarliestIdleTime.getOrElseUpdate(execId, 0L),
                   curTime + evalTaskDuration))
+                // 这里判断当前exec应不应该跳过
+                var unscheduledTasks = numTasks - scheduledTasks
+                executorIdToEarliestIdleTime.foreach {
+                  case (exec, earliestIdleTime) => {
+                    if (unscheduledTasks >= 0 &&
+                      // 考虑的exec 比 当前调度的executor 至少 快PROCESS_RATE_THRESHOLD倍(默认1.25)
+                      executorIdToLastRoundAvgProcessRate(execId) * PROCESS_RATE_THRESHOLD < executorIdToLastRoundAvgProcessRate(exec)) {
+                      val canRunDuration = executorIdToEarliestIdleTime(execId) - earliestIdleTime
+                      if (canRunDuration > 0) {
+                        val canFinishTasks = canRunDuration / executorIdToLastRoundAvgDurationWithoutFetch(exec) * EXECUTOR_CORES
+                        unscheduledTasks -= canFinishTasks.toInt
+                        logInfo(s"#####当前考虑的exec=${exec},canRunDuration=${canRunDuration}," +
+                          s"executorIdToLastRoundAvgDuration(exec)=${executorIdToLastRoundAvgDurationWithoutFetch(exec)}," +
+                          s"canFinishTasks=${canFinishTasks},unscheduledTasks=${unscheduledTasks} #####")
+                      }
+                    }
+                  }
+                }
+                if (unscheduledTasks < 0) {
+                  skipExec.add(execId)
+                  logInfo(s"#####当前execId=${execId},host=${host},应该跳过 #####")
+                }
                 logInfo(s"#####executorIdToEarliestIdleTime[调度新任务后]=\n${executorIdToEarliestIdleTime.mkString("\n")}#####")
               }
               // We used to log the time it takes to serialize the task, but task size is already
@@ -729,7 +763,8 @@ private[spark] class TaskSetManager(
                 task.localProperties,
                 taskResourceAssignments,
                 serializedTask)
-          }      }
+          }
+      }
       val hasPendingTasks = pendingTasks.all.nonEmpty || pendingSpeculatableTasks.all.nonEmpty
       // 如果任务没有被执行但是任务队列中有任务,表示任务资源请求被拒绝了
       val hasScheduleDelayReject =
