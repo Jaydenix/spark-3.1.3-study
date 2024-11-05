@@ -189,12 +189,17 @@ private[spark] class TaskSetManager(
   private[scheduler] val executorIdToRunningTaskIds = new HashMap[String, ArrayBuffer[Long]]
   private[scheduler] var scheduledTasks = 0
   private[scheduler] var finishedTasks = 0
+  private[scheduler] var isStable = true
   /**
    * Custom modifications by jaken
    * 性能评估
    */
   private[scheduler] val executorIdToLastRoundAvgProcessRate = new HashMap[String, Double]
+  // 用来评估调度是否稳定
+  private[scheduler] val executorIdToMinAndMaxProcessRate = new HashMap[String, (Double, Double)]
+
   private[scheduler] val executorIdToLastRoundAvgDurationWithoutFetch = new HashMap[String, Long]
+  private[scheduler] val executorIdToEachRoundAvgDurationWithoutFetch = new HashMap[String, ArrayBuffer[Long]]
   // 从 spark-defaults.conf 中获取 spark.host.performance 属性值
   private[scheduler] val hostPerformanceString = conf.get("spark.host.performance")
   // 拆分字符串并封装到 HashMap 中
@@ -213,10 +218,10 @@ private[spark] class TaskSetManager(
   private[scheduler] val executorIdToEarliestIdleTime = new HashMap[String, Long]
   private val EVALUATE_ROUND = conf.getInt("spark.evaluate.round", 1)
   private val PROCESS_RATE_THRESHOLD = conf.getDouble("spark.processRate.threshold", 1.25)
-  private val FIRST_ROUND_COMPENSATE = conf.getDouble("spark.firstRound.compensate", 0.7)
+  private var compensateFactor = conf.getDouble("spark.firstRound.compensate", 0.7)
 
   // 标记当前executor需不需要等待
-  private val skipExec = new mutable.HashSet[String]()
+  val skipExec = new mutable.HashSet[String]()
   // Use a MedianHeap to record durations of successful tasks so we know when to launch
   // speculative tasks. This is only used when speculation is enabled, to avoid the overhead
   // of inserting into the heap when the heap won't be used.
@@ -289,7 +294,7 @@ private[spark] class TaskSetManager(
    * Custom modifications by jaken
    * sort queue by 首先按照位置权重降序排序 数据在高性能节点上则权重更高,如果权重相同,则按照数据量升序排序
    */
-  if (conf.getBoolean("spark.descSort.locationWeight", defaultValue = true)) descSortPendingTasksByLocationWeight()
+  if (conf.getBoolean("spark.descSort.locationWeight", defaultValue = false)) descSortPendingTasksByLocationWeight()
 
   private def descSortPendingTasksByLocationWeight(speculatable: Boolean = false): Unit = {
     logInfo(s"============降序排序前============")
@@ -454,6 +459,7 @@ private[spark] class TaskSetManager(
           if (copiesRunning(index) == 0) {
             return Some(index)
           } else if (speculative && copiesRunning(index) == 1) {
+            // 暂时不考虑本方法和推测执行相结合的情况
             return Some(index)
           }
         }
@@ -598,6 +604,16 @@ private[spark] class TaskSetManager(
                      maxLocality: TaskLocality.TaskLocality,
                      taskResourceAssignments: Map[String, ResourceInformation] = Map.empty)
   : (Option[TaskDescription], Boolean) = {
+    /**
+     * Custom modifications by jaken
+     * 如果当前exec已经被标记为需要跳过了 直接放弃本次调度
+     */
+    // TODO 可能需要考虑延迟调度的问题？
+    if (skipExec.contains(execId)) {
+      logInfo(s"=====针对当前exec=${execId}的调度被跳过=====")
+      return (None, false)
+    }
+
     // 判断当前的executor和host是不是对当前任务集来说不可用
     val offerExcluded = taskSetExcludelistHelperOpt.exists { excludeList =>
       excludeList.isNodeExcludedForTaskSet(host) ||
@@ -610,26 +626,27 @@ private[spark] class TaskSetManager(
       logInfo(s"#####executorIdToScheduledTaskIds=\n${executorIdToScheduledTaskIds.mkString("\n")}#####")
       logInfo(s"#####executorIdToRunningTaskIds=\n${executorIdToRunningTaskIds.mkString("\n")}#####")
       logInfo(s"#####executorIdToFinishedTaskIds=\n${executorIdToFinishedTaskIds.mkString("\n")}#####")
+      logInfo(s"#####skipExec=\n${skipExec.mkString("\n")}#####")
       // logInfo(s"#####executorIdToEarliestIdleTime[调度新任务前]=\n${executorIdToEarliestIdleTime.mkString("\n")}#####")
 
       val EVALUATE_TASK_THRESHOLD = EXECUTOR_CORES * EVALUATE_ROUND
       // 下面开始计算executor的处理速度
-      executorIdToFinishedTaskIds.foreach { case (executorId, finishedTaskIds) =>
+      if (executorIdToFinishedTaskIds.contains(execId)) {
         // EVALUATE_ROUND 表示从哪一轮才开始计算exec的处理速度
         // 当完成的任务数 <= 开始评估的任务数时,表明当前exec无需考虑,此时其性能会记录为0
-        val taskIdsToConsider = if (finishedTaskIds.size <= EVALUATE_TASK_THRESHOLD) {
+        val taskIdsToConsider = if (executorIdToFinishedTaskIds(execId).size <= EVALUATE_TASK_THRESHOLD) {
           ArrayBuffer.empty[Long]
         }
         // 当完成的任务数 > 开始评估的任务数 && 能用于评估的任务数 <= EXECUTOR_CORES时,取所有能用于评估的任务数
-        else if (finishedTaskIds.size - EVALUATE_TASK_THRESHOLD <= EXECUTOR_CORES) {
-          finishedTaskIds.takeRight(finishedTaskIds.size - EVALUATE_TASK_THRESHOLD)
+        else if (executorIdToFinishedTaskIds(execId).size - EVALUATE_TASK_THRESHOLD <= EXECUTOR_CORES) {
+          executorIdToFinishedTaskIds(execId).takeRight(executorIdToFinishedTaskIds(execId).size - EVALUATE_TASK_THRESHOLD)
         }
         // 否则取最后 EXECUTOR_CORES 个任务 -> (该)取最近一轮的任务,该任务数属于区间[1,EXECUTOR_CORES]
         else {
-          val round = finishedTaskIds.size / EXECUTOR_CORES
-          val leftTasks = finishedTaskIds.size - (EXECUTOR_CORES * round)
-          if (leftTasks > 0) finishedTaskIds.takeRight(finishedTaskIds.size - (EXECUTOR_CORES * round))
-          else finishedTaskIds.takeRight(EXECUTOR_CORES)
+          val round = executorIdToFinishedTaskIds(execId).size / EXECUTOR_CORES
+          val leftTasks = executorIdToFinishedTaskIds(execId).size - (EXECUTOR_CORES * round)
+          if (leftTasks > 0) executorIdToFinishedTaskIds(execId).takeRight(executorIdToFinishedTaskIds(execId).size - (EXECUTOR_CORES * round))
+          else executorIdToFinishedTaskIds(execId).takeRight(EXECUTOR_CORES)
         }
 
         // 初始化总数据量和总运行时间
@@ -647,15 +664,15 @@ private[spark] class TaskSetManager(
 
           // 任务的metrics信息需要等任务解决拉取后才能得到 所以实时获取最近完成任务的metrics是不太方便的
           /* logInfo(s"#####当前评估的任务tid=${tid},partitionId=${task.partitionId}," +
-             s"Duration=${taskDurationS}s,DataSize=${taskDataSizeMB}MB #####")
-           taskInfo.accumulables.foreach { accInfo =>
-             val name = accInfo.name.getOrElse("Unnamed")
-             // update表示该任务的在当前指标下的值
-             val update = accInfo.update.getOrElse("No Update")
-             // value表示当前指标下所有任务的累加值
-             // val value = accInfo.value.getOrElse("No Value")
-             logInfo(s"Metric: $name, Update: $update")
-           }*/
+           s"Duration=${taskDurationS}s,DataSize=${taskDataSizeMB}MB #####")
+         taskInfo.accumulables.foreach { accInfo =>
+           val name = accInfo.name.getOrElse("Unnamed")
+           // update表示该任务的在当前指标下的值
+           val update = accInfo.update.getOrElse("No Update")
+           // value表示当前指标下所有任务的累加值
+           // val value = accInfo.value.getOrElse("No Value")
+           logInfo(s"Metric: $name, Update: $update")
+         }*/
 
           // 累加运行时间和数据量
           totalDurationMS += taskDurationMs
@@ -666,12 +683,17 @@ private[spark] class TaskSetManager(
         if (totalDurationMS > 0) {
           // 单位MB/s
           val avgProcessRate = (totalDataSizeKB / totalDurationMS).formatted("%.2f").toDouble // 保留两位小数
-          executorIdToLastRoundAvgProcessRate(executorId) = avgProcessRate
-          executorIdToLastRoundAvgDurationWithoutFetch(executorId) = totalDurationMS / taskIdsToConsider.size
+          executorIdToLastRoundAvgProcessRate(execId) = avgProcessRate
+          val avgDuration = totalDurationMS / taskIdsToConsider.size
+          executorIdToLastRoundAvgDurationWithoutFetch(execId) = avgDuration
+          if (executorIdToFinishedTaskIds(execId).size % EXECUTOR_CORES == 0) {
+            executorIdToEachRoundAvgDurationWithoutFetch.getOrElseUpdate(execId, ArrayBuffer()) += avgDuration
+          }
         }
       }
       logInfo(s"#####executorIdToLastRoundAvgProcessRate=\n${executorIdToLastRoundAvgProcessRate.mkString("\n")}#####")
       logInfo(s"#####executorIdToLastRoundAvgDuration=\n${executorIdToLastRoundAvgDurationWithoutFetch.mkString("\n")}#####")
+      logInfo(s"#####executorIdToEachRoundAvgDurationWithoutFetch=\n${executorIdToEachRoundAvgDurationWithoutFetch.mkString("\n")}#####")
 
       // allowedLocality = 最大的数据本地性等级
       var allowedLocality = maxLocality
@@ -705,9 +727,130 @@ private[spark] class TaskSetManager(
               // Found a task; do some bookkeeping and return a task description
               // 拿到真正的任务
               val task = tasks(index)
+
+              // ==========================================================================================================
+              /**
+               * Custom modifications by jaken
+               * 在这里判断要取出任务是否会造成其他exec等待 如果是 就返回None 并且标记当前executor需要跳过
+               */
+              // var evalEarliestIdleTime = 0L
+              // 当前executor已经存在评估的性能 更新executor的最早空闲时间
+              // 所以从第二轮的任务开始(round = 0时) 才会有任务的预估时间
+              if (executorIdToLastRoundAvgProcessRate.getOrElse(execId, 0.0) > 0) {
+                // 序列化补偿
+                val evalTaskDuration = if (executorIdToFinishedTaskIds(execId).size <= EXECUTOR_CORES) {
+                  // 计算补偿因子
+                  val ratios = executorIdToEachRoundAvgDurationWithoutFetch.values.flatMap { array =>
+                    if (array.length >= 2) {
+                      Some(array(1).toDouble / array(0))
+                    } else {
+                      None
+                    }
+                  }
+                  if (ratios.nonEmpty) compensateFactor = (ratios.sum / ratios.size).formatted("%.2f").toDouble
+                  logInfo(s"#####序列化的补偿因子compensateFactor=${compensateFactor} #####")
+                  (compensateFactor * task.readSize / (1024 * executorIdToLastRoundAvgProcessRate(execId))).toLong
+                } else {
+                  (task.readSize / (1024 * executorIdToLastRoundAvgProcessRate(execId))).toLong
+                }
+                val curTime = clock.getTimeMillis()
+                logInfo(s"#####executorIdToEarliestIdleTime[调度新任务前]=\n${executorIdToEarliestIdleTime.mkString("\n")}#####")
+                logInfo(s"#####executorIdToMinAndMaxProcessRate[调度新任务前]=\n${executorIdToMinAndMaxProcessRate.mkString("\n")}#####")
+                logInfo(s"#####pid=${task.partitionId},execId=${execId},当前时间=${curTime},预估任务完成时间=${evalTaskDuration}#####")
+                val evalEarliestIdleTime = curTime + evalTaskDuration
+
+                // 当数据本地性等级为NO_PREF时 取出来的任务也会是PROCESS_LOCAL 所以添加了preferredLocations的判断
+                // 如果当前任务是PROCESS_LOCAL等级 就不需要考虑等待 因为PROCESS_LOCAL等级的数据往往是以缓存的形式只一个executor内
+                // (taskLocality == TaskLocality.PROCESS_LOCAL && tasks(index).preferredLocations.nonEmpty)
+                // 考虑到任务的偏好位置可能只有一个,比如:terasort的stage0 虽然是NODE_LOCAL 但是只有一个偏好位置 所以采用下面的写法
+                if (!isStable || tasks(index).preferredLocations.size == 1) {
+                  executorIdToEarliestIdleTime.update(execId, evalEarliestIdleTime)
+                  if (taskLocality != TaskLocality.PROCESS_LOCAL) logInfo(s"#####index=${index},isStable=${isStable},直接在host=${host},exec=${execId}上运行#####")
+                  logInfo(s"#####executorIdToEarliestIdleTime[提前退出]=\n${executorIdToEarliestIdleTime.mkString("\n")}#####")
+                }
+                else {
+                  // 如果评估的最早完成时间 > 所记录的最早完成时间 就继续进行下去 否则可以直接执行当前任务
+                  // TODO 如果executorIdToEarliestIdleTime错误地很大，当前的evalEarliestIdleTime比较小 那其实也应当比较
+                  if (evalEarliestIdleTime > executorIdToEarliestIdleTime.getOrElseUpdate(execId, curTime)) {
+                    logInfo(s"=====进入时间比较=====")
+                    // 这里判断当前exec应不应该跳过
+                    var unscheduledTasks = numTasks - scheduledTasks
+                    executorIdToEarliestIdleTime.foreach {
+                      case (exec, earliestIdleTime) => {
+                        if (unscheduledTasks >= 0 &&
+                          // 考虑的exec 比 当前调度的executor 至少 快PROCESS_RATE_THRESHOLD倍(默认1.25)
+                          executorIdToLastRoundAvgProcessRate(execId) * PROCESS_RATE_THRESHOLD < executorIdToLastRoundAvgProcessRate(exec)) {
+                          val canRunDuration = evalEarliestIdleTime - earliestIdleTime
+                          if (canRunDuration > 0) {
+                            val canFinishTasks = canRunDuration / executorIdToLastRoundAvgDurationWithoutFetch(exec) * EXECUTOR_CORES
+                            unscheduledTasks -= canFinishTasks.toInt
+                            logInfo(s"#####当前考虑的exec=${exec},canRunDuration=${canRunDuration}," +
+                              s"executorIdToLastRoundAvgDuration(exec)=${executorIdToLastRoundAvgDurationWithoutFetch(exec)}," +
+                              s"canFinishTasks=${canFinishTasks},unscheduledTasks=${unscheduledTasks} #####")
+                          }
+                        }
+                      }
+                    }
+                    // 当负载的运行时长受性能影响很小时,如 LDA
+                    // 可能会出现任务丢失的情况：任务的数据放在A B C三个exec上，而A B 在之前就已经被看作是要跳过的exec了，此时C也需要被跳过
+                    // 所以我们这里添加一个附加条件，如果能运行的exec数目等于1(当前被考虑的exec,以上述为例,即C),那我们就不跳过了，因为他只能在这里运行了
+                    val localExecs = tasks(index).preferredLocations.flatMap(loc => sched.hostToExecutors(loc.host))
+                    val canRunExecs = localExecs.filter(!skipExec.contains(_))
+                    // val canRunExecCount = localExecs.count(!skipExec.contains(_))
+                    // 过滤出 当前可用的最快的exec
+                    val fastestExecRate = if (canRunExecs.nonEmpty) canRunExecs.map(executorIdToLastRoundAvgProcessRate.getOrElse(_, 0.0)).max else -1
+                    logInfo(s"#####localExecs=${localExecs},fastestExecRate=${fastestExecRate}#####")
+                    if (unscheduledTasks < 0) {
+                      /*if (canRunExecCount == 1) {
+                        logInfo(s"#####[任务不可跳过,最后一个可用Exec]任务task=${task}#####")
+                        executorIdToEarliestIdleTime.update(execId, evalEarliestIdleTime)
+                      } else */
+                      // TODO 或者不保留最快的exec 而是当出现延迟调度时 过滤掉 比 被跳过exec还慢的exec 因为这些exec可能会因为数据本地性任务数太少(只够运行一轮)而错过判定
+                      // TODO 记录每个exec的最大处理速率和最小处理速率 如果他们的比值超过3 表明当前负载很不稳定
+                      if (fastestExecRate == executorIdToLastRoundAvgProcessRate(execId)) {
+                        logInfo(s"#####[任务不可跳过,最快的Exec]任务task=${task}#####")
+                        executorIdToEarliestIdleTime.update(execId, evalEarliestIdleTime)
+                      }
+                      else {
+                        skipExec.add(execId)
+                        // 如果是ANY和NO_PREF 需要将当前被跳过的任务添加回去来避免该任务永远不会执行
+                        if (taskLocality == TaskLocality.ANY) {
+                          pendingTasks.all += index
+                        } else if (taskLocality == TaskLocality.PROCESS_LOCAL && tasks(index).preferredLocations.isEmpty) {
+                          pendingTasks.noPrefs += index
+                        }
+                        /*
+                        // 当前exec要等待 那就还需要考虑应该将这个任务放在哪
+                        // 默认放在性能最高的节点上运行
+                        // 这是一个保底的策略 因为假如任务的数据本地性权重很差，在其本地性的节点上都会造成等待 至少我们要保证它要在性能最高的本地节点上运行
+                        var maxPerformanceHost = ""
+                        var maxPerformance = 0.0
+                        tasks(index).preferredLocations.foreach { location =>
+                          val host = location.host
+                          val maxHostPerformance = sched.hostToExecutors(host).map(executorIdToLastRoundAvgProcessRate(_)).max
+                          if (maxPerformance < maxHostPerformance) {
+                            maxPerformanceHost = host
+                            maxPerformance = maxHostPerformance
+                          }
+                        }
+                        if (maxPerformanceHost.nonEmpty) skipTask.put(index, maxPerformanceHost)*/
+                        logInfo(s"#####stage=${stageId},当前execId=${execId},host=${host},应该跳过,task=${task} #####")
+                        return (None, false)
+                      }
+                    }
+                    else {
+                      // 当不需要跳过的时候 就需要更新当前exec的最早空闲时间
+                      executorIdToEarliestIdleTime.update(execId, evalEarliestIdleTime)
+                      logInfo(s"#####executorIdToEarliestIdleTime[任务无需跳过]=\n${executorIdToEarliestIdleTime.mkString("\n")}#####")
+                    }
+                  }
+                }
+              }
+              // ======================================================================================
               val taskId = sched.newTaskId()
               logInfo(s"#####真正取出任务本地性等级为${taskLocality},taskId=${taskId},execId=${execId},host=${host},task=${tasks(index)}#####")
               logInfo(s"==============<取出任务后>taskSet=${this}=================")
+
               // Do various bookkeeping
               copiesRunning(index) += 1
               val attemptNum = taskAttempts(index).size
@@ -747,49 +890,11 @@ private[spark] class TaskSetManager(
 
               /**
                * Custom modifications by jaken
-               * map, value都是一个有序的集合
+               * map中的value都是一个有序的集合 当任务被真正拿出来的时候才会更新任务指标
                */
               executorIdToScheduledTaskIds.getOrElseUpdate(execId, ArrayBuffer()) += taskId
               scheduledTasks += 1
               executorIdToRunningTaskIds.getOrElseUpdate(execId, ArrayBuffer()) += taskId
-              // 当前executor已经存在评估的性能 更新executor的最早空闲时间
-              // 所以从第三轮的任务开始(round = 1 时) 才会有任务的预估时间
-              if (executorIdToLastRoundAvgProcessRate.getOrElse(execId, 0.0) > 0) {
-                // 序列化补偿
-                val evalTaskDuration = if (executorIdToFinishedTaskIds(execId).size <= EXECUTOR_CORES) {
-                  (FIRST_ROUND_COMPENSATE * task.readSize / (1024 * executorIdToLastRoundAvgProcessRate(execId))).toLong
-                } else {
-                  (task.readSize / (1024 * executorIdToLastRoundAvgProcessRate(execId))).toLong
-                }
-                val curTime = clock.getTimeMillis()
-                logInfo(s"#####executorIdToEarliestIdleTime[调度新任务前]=\n${executorIdToEarliestIdleTime.mkString("\n")}#####")
-                logInfo(s"#####pid=${task.partitionId},execId=${execId},当前时间=${curTime},预估任务完成时间=${evalTaskDuration}#####")
-                executorIdToEarliestIdleTime.update(execId, Math.max(executorIdToEarliestIdleTime.getOrElseUpdate(execId, 0L),
-                  curTime + evalTaskDuration))
-                // 这里判断当前exec应不应该跳过
-                var unscheduledTasks = numTasks - scheduledTasks
-                executorIdToEarliestIdleTime.foreach {
-                  case (exec, earliestIdleTime) => {
-                    if (unscheduledTasks >= 0 &&
-                      // 考虑的exec 比 当前调度的executor 至少 快PROCESS_RATE_THRESHOLD倍(默认1.25)
-                      executorIdToLastRoundAvgProcessRate(execId) * PROCESS_RATE_THRESHOLD < executorIdToLastRoundAvgProcessRate(exec)) {
-                      val canRunDuration = executorIdToEarliestIdleTime(execId) - earliestIdleTime
-                      if (canRunDuration > 0) {
-                        val canFinishTasks = canRunDuration / executorIdToLastRoundAvgDurationWithoutFetch(exec) * EXECUTOR_CORES
-                        unscheduledTasks -= canFinishTasks.toInt
-                        logInfo(s"#####当前考虑的exec=${exec},canRunDuration=${canRunDuration}," +
-                          s"executorIdToLastRoundAvgDuration(exec)=${executorIdToLastRoundAvgDurationWithoutFetch(exec)}," +
-                          s"canFinishTasks=${canFinishTasks},unscheduledTasks=${unscheduledTasks} #####")
-                      }
-                    }
-                  }
-                }
-                if (unscheduledTasks < 0) {
-                  skipExec.add(execId)
-                  logInfo(s"#####当前execId=${execId},host=${host},应该跳过 #####")
-                }
-                logInfo(s"#####executorIdToEarliestIdleTime[调度新任务后]=\n${executorIdToEarliestIdleTime.mkString("\n")}#####")
-              }
               // We used to log the time it takes to serialize the task, but task size is already
               // a good proxy to task serialization time.
               // val timeTaken = clock.getTime() - startTime

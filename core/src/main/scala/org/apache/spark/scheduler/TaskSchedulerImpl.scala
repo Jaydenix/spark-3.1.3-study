@@ -134,6 +134,7 @@ private[spark] class TaskSchedulerImpl(
    */
   val usedExec = new mutable.HashSet[String]
   var recoredUsedExec = new mutable.HashSet[String]
+  private val MAX_MIN_GAP = conf.getDouble("spark.processRate.gap", 5.0)
 
   @volatile private var hasReceivedTask = false
   @volatile private var hasLaunchedTask = false
@@ -156,7 +157,7 @@ private[spark] class TaskSchedulerImpl(
   // The set of executors we have on each host; this is used to compute hostsAlive, which
   // in turn is used to decide when we can attain data locality on a given host
   // 主机上的executor的映射
-  protected val hostToExecutors = new HashMap[String, HashSet[String]]
+  val hostToExecutors = new HashMap[String, HashSet[String]]
 
   protected val hostsByRack = new HashMap[String, HashSet[String]]
 
@@ -1048,7 +1049,22 @@ private[spark] class TaskSchedulerImpl(
               val task = taskSet.tasks(taskInfo.index)
               taskInfo.finishTimeWithoutFetchRes = clock.getTimeMillis()
               taskInfo.durationWithoutFetchRes = taskInfo.finishTimeWithoutFetchRes - taskInfo.launchTime
-              taskSet.executorIdToFinishedTaskIds.getOrElseUpdate(taskIdToExecutorId(tid), ArrayBuffer()) += tid
+              val executorId = taskIdToExecutorId(tid)
+              taskSet.executorIdToFinishedTaskIds.getOrElseUpdate(executorId, ArrayBuffer()) += tid
+              // 不考虑序列化的任务
+              // if (taskSet.executorIdToFinishedTaskIds.size > taskSet.EXECUTOR_CORES) {}
+              val processRate = ((task.readSize.toDouble / 1024) / taskInfo.durationWithoutFetchRes).formatted("%.2f").toDouble
+              val (min, max) = taskSet.executorIdToMinAndMaxProcessRate.getOrElse(executorId, (processRate, processRate))
+              val (newMin, newMax) = (math.min(min, processRate), math.max(max, processRate))
+              // logInfo(s"#####taskSet.isStable=${taskSet.isStable} #####")
+              if (taskSet.isStable && newMax / newMin >= MAX_MIN_GAP) {
+                taskSet.isStable = false
+                taskSet.skipExec.clear()
+                logInfo(s"#####当前exec=${executorId},stageId=${taskSet.stageId},newMin=${newMin},newMax=${newMax},任务运行速率不稳定,清空skipExec #####")
+              }
+              taskSet.executorIdToMinAndMaxProcessRate.put(executorId, (newMin, newMax))
+
+
               taskSet.finishedTasks += 1
               taskSet.executorIdToRunningTaskIds(taskIdToExecutorId(tid)) -= tid
 
