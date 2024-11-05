@@ -246,8 +246,8 @@ private[spark] class TaskSetManager(
    * Custom modifications by jaken
    * sort queue by task.allSize
    */
-  // DescSortPendingTasks()
-  private def DescSortPendingTasks(speculatable: Boolean = false): Unit = {
+  DescSortPendingTasksByDataSize()
+  private def DescSortPendingTasksByDataSize(speculatable: Boolean = false): Unit = {
     logInfo(s"============降序排序前============")
     logInfo(s"前50个pendingTasks.forExecutor=\n${pendingTasks.forExecutor.take(50).mkString("\n")}\n" +
       s"前50个pendingTasks.forHost=\n${pendingTasks.forHost.take(50).mkString("\n")}\n" +
