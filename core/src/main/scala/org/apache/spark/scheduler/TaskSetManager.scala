@@ -275,7 +275,7 @@ private[spark] class TaskSetManager(
       }
     }
     pendingTaskSetToAddTo.noPrefs = pendingTaskSetToAddTo.noPrefs.sortBy(index => -tasks(index).readSize)
-    pendingTaskSetToAddTo.noPrefs = pendingTaskSetToAddTo.all.sortBy(index => -tasks(index).readSize)
+    pendingTaskSetToAddTo.all = pendingTaskSetToAddTo.all.sortBy(index => -tasks(index).readSize)
 
     logInfo(s"============降序排序后============")
     logInfo(s"前50个pendingTasks.forExecutor=\n${pendingTasks.forExecutor.take(50).mkString("\n")}\n" +
