@@ -800,7 +800,7 @@ private[spark] class TaskSetManager(
                     // 过滤出 当前可用的最快的exec
                     val fastestExecRate = if (canRunExecs.nonEmpty) canRunExecs.map(executorIdToLastRoundAvgProcessRate.getOrElse(_, 0.0)).max else -1
                     logInfo(s"#####localExecs=${localExecs},fastestExecRate=${fastestExecRate}#####")
-                    if (unscheduledTasks < 0) {
+                    if (unscheduledTasks <= 0) {
                       /*if (canRunExecCount == 1) {
                         logInfo(s"#####[任务不可跳过,最后一个可用Exec]任务task=${task}#####")
                         executorIdToEarliestIdleTime.update(execId, evalEarliestIdleTime)
