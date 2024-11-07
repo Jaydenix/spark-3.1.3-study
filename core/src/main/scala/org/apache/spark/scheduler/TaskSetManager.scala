@@ -245,9 +245,10 @@ private[spark] class TaskSetManager(
   /**
    * Custom modifications by jaken
    * sort queue by task.allSize
+   *  优先取出数据量最大的任
    */
-  DescSortPendingTasksByDataSize()
-  private def DescSortPendingTasksByDataSize(speculatable: Boolean = false): Unit = {
+  sortPendingTasksByDataSize()
+  private def sortPendingTasksByDataSize(speculatable: Boolean = false): Unit = {
     logInfo(s"============降序排序前============")
     logInfo(s"前50个pendingTasks.forExecutor=\n${pendingTasks.forExecutor.take(50).mkString("\n")}\n" +
       s"前50个pendingTasks.forHost=\n${pendingTasks.forHost.take(50).mkString("\n")}\n" +
@@ -259,23 +260,23 @@ private[spark] class TaskSetManager(
     pendingTaskSetToAddTo.forExecutor.foreach {
       case (executorName, taskIds) => {
         // 加个负号表示降序
-        pendingTaskSetToAddTo.forExecutor(executorName) = taskIds.sortBy(index => -tasks(index).readSize)
+        pendingTaskSetToAddTo.forExecutor(executorName) = taskIds.sortBy(index => tasks(index).readSize)
       }
     }
     pendingTaskSetToAddTo.forHost.foreach {
       case (hostName, taskIds) => {
         // 加个负号表示降序
-        pendingTaskSetToAddTo.forHost(hostName) = taskIds.sortBy(index => -tasks(index).readSize)
+        pendingTaskSetToAddTo.forHost(hostName) = taskIds.sortBy(index => tasks(index).readSize)
       }
     }
     pendingTaskSetToAddTo.forRack.foreach {
       case (rackName, taskIds) => {
         // 加个负号表示降序
-        pendingTaskSetToAddTo.forRack(rackName) = taskIds.sortBy(index => -tasks(index).readSize)
+        pendingTaskSetToAddTo.forRack(rackName) = taskIds.sortBy(index => tasks(index).readSize)
       }
     }
-    pendingTaskSetToAddTo.noPrefs = pendingTaskSetToAddTo.noPrefs.sortBy(index => -tasks(index).readSize)
-    pendingTaskSetToAddTo.all = pendingTaskSetToAddTo.all.sortBy(index => -tasks(index).readSize)
+    pendingTaskSetToAddTo.noPrefs = pendingTaskSetToAddTo.noPrefs.sortBy(index => tasks(index).readSize)
+    pendingTaskSetToAddTo.all = pendingTaskSetToAddTo.all.sortBy(index => tasks(index).readSize)
 
     logInfo(s"============降序排序后============")
     logInfo(s"前50个pendingTasks.forExecutor=\n${pendingTasks.forExecutor.take(50).mkString("\n")}\n" +
