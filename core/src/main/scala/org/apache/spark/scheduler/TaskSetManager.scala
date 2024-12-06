@@ -629,8 +629,8 @@ private[spark] class TaskSetManager(
       logInfo(s"#####skipExec=\n${skipExec.mkString("\n")}#####")
       // logInfo(s"#####executorIdToEarliestIdleTime[调度新任务前]=\n${executorIdToEarliestIdleTime.mkString("\n")}#####")
 
+      // <开始>下面计算executor的处理速度===========================================================================================
       val EVALUATE_TASK_THRESHOLD = EXECUTOR_CORES * EVALUATE_ROUND
-      // 下面开始计算executor的处理速度
       if (executorIdToFinishedTaskIds.contains(execId)) {
         // EVALUATE_ROUND 表示从哪一轮才开始计算exec的处理速度
         // 当完成的任务数 <= 开始评估的任务数时,表明当前exec无需考虑,此时其性能会记录为0
@@ -645,7 +645,7 @@ private[spark] class TaskSetManager(
         else {
           val round = executorIdToFinishedTaskIds(execId).size / EXECUTOR_CORES
           val leftTasks = executorIdToFinishedTaskIds(execId).size - (EXECUTOR_CORES * round)
-          if (leftTasks > 0) executorIdToFinishedTaskIds(execId).takeRight(executorIdToFinishedTaskIds(execId).size - (EXECUTOR_CORES * round))
+          if (leftTasks > 0) executorIdToFinishedTaskIds(execId).takeRight(leftTasks)
           else executorIdToFinishedTaskIds(execId).takeRight(EXECUTOR_CORES)
         }
 
@@ -686,6 +686,7 @@ private[spark] class TaskSetManager(
           executorIdToLastRoundAvgProcessRate(execId) = avgProcessRate
           val avgDuration = totalDurationMS / taskIdsToConsider.size
           executorIdToLastRoundAvgDurationWithoutFetch(execId) = avgDuration
+          // TODO 这里可能会出现重复加入的情况
           if (executorIdToFinishedTaskIds(execId).size % EXECUTOR_CORES == 0) {
             executorIdToEachRoundAvgDurationWithoutFetch.getOrElseUpdate(execId, ArrayBuffer()) += avgDuration
           }
@@ -694,6 +695,7 @@ private[spark] class TaskSetManager(
       logInfo(s"#####executorIdToLastRoundAvgProcessRate=\n${executorIdToLastRoundAvgProcessRate.mkString("\n")}#####")
       logInfo(s"#####executorIdToLastRoundAvgDuration=\n${executorIdToLastRoundAvgDurationWithoutFetch.mkString("\n")}#####")
       logInfo(s"#####executorIdToEachRoundAvgDurationWithoutFetch=\n${executorIdToEachRoundAvgDurationWithoutFetch.mkString("\n")}#####")
+      // <结束>计算executor的处理速度============================================================================================================
 
       // allowedLocality = 最大的数据本地性等级
       var allowedLocality = maxLocality
@@ -800,6 +802,7 @@ private[spark] class TaskSetManager(
                     // 过滤出 当前可用的最快的exec
                     val fastestExecRate = if (canRunExecs.nonEmpty) canRunExecs.map(executorIdToLastRoundAvgProcessRate.getOrElse(_, 0.0)).max else -1
                     logInfo(s"#####localExecs=${localExecs},fastestExecRate=${fastestExecRate}#####")
+                    // 等于0应当被取到 因为unscheduledTasks其实并没有包括当前executor要调度的任务 这意味着当前任务可以在快executor上运行
                     if (unscheduledTasks <= 0) {
                       /*if (canRunExecCount == 1) {
                         logInfo(s"#####[任务不可跳过,最后一个可用Exec]任务task=${task}#####")
